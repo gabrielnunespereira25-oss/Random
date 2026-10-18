@@ -9,13 +9,11 @@ ASFLAGS = $(CFLAGS)
 
 BUILD_PRX = 1
 PSP_FW_VERSION = 660
+
 EXTRA_TARGETS = EBOOT.PBP
 PSP_EBOOT_TITLE = RANDOM Beta 0.1
 
-LIBS = -lpspdebug -lpspdisplay -lpspctrl -lpspkernel
+LIBS = -lpspgu -lpspgum -lpspdebug -lpspdisplay -lpspctrl -lpspkernel
 
 PSPSDK := $(shell psp-config --pspsdk-path)
 include $(PSPSDK)/lib/build.mak
-
-src/main.o: src/main.c
-	$(CC) $(CFLAGS) -c $< -o $@
