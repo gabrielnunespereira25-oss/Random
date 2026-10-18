@@ -14,7 +14,6 @@ PSP_MAIN_THREAD_ATTR(THREAD_ATTR_USER);
 #define STRIDE 512
 #define LIST_SIZE (64 * 1024)
 #define WORLD_W 1800
-#define WORLD_H 560
 #define PLAYER_W 25
 #define PLAYER_H 38
 #define MAX_SHOTS 8
@@ -38,32 +37,32 @@ displayList[LIST_SIZE / 4];
 
 static int screen = 0;
 static float playerX = 60.0f;
-static float playerY = 372.0f;
+static float playerY = 197.0f;
 static float velocityY = 0.0f;
 
-static int grounded = 0;
+static int grounded = 1;
 static int doubleJumpUsed = 0;
 static int magicUnlocked = 0;
 static int magicTaken = 0;
 static int cameraX = 0;
-static int cameraY = 95;
+static int cameraY = 0;
 static int shotCooldown = 0;
 
 static const int magicX = 370;
-static const int magicY = 370;
+static const int magicY = 195;
 
 static Shot shots[MAX_SHOTS];
 static unsigned int previousButtons = 0;
 
 static Platform platforms[] = {
-    {0,410,360,90},
-    {390,410,360,90},
-    {780,410,330,90},
-    {1140,410,300,90},
-    {1470,410,330,90},
-    {540,370,70,40},
-    {1030,380,65,30},
-    {1370,370,65,40}
+    {0,235,360,90},
+    {390,235,360,90},
+    {780,235,330,90},
+    {1140,235,300,90},
+    {1470,235,330,90},
+    {540,205,70,30},
+    {1030,210,65,25},
+    {1370,205,65,30}
 };
 
 #define PLATFORM_COUNT \
@@ -96,17 +95,22 @@ static void rectangle(
     int x, int y, int w, int h,
     unsigned short color)
 {
-    Vertex *v = (Vertex *)sceGuGetMemory(
+    Vertex *v;
+
+    if (w <= 0 || h <= 0)
+        return;
+
+    v = (Vertex *)sceGuGetMemory(
         2 * sizeof(Vertex));
 
     v[0].color = color;
-    v[0].x = x;
-    v[0].y = y;
+    v[0].x = (short)x;
+    v[0].y = (short)y;
     v[0].z = 0;
 
     v[1].color = color;
-    v[1].x = x + w;
-    v[1].y = y + h;
+    v[1].x = (short)(x + w);
+    v[1].y = (short)(y + h);
     v[1].z = 0;
 
     sceGuDrawArray(
@@ -135,7 +139,6 @@ static void endFrame(void)
 static void initGraphics(void)
 {
     sceGuInit();
-
     sceGuStart(GU_DIRECT, displayList);
 
     sceGuDrawBuffer(
@@ -164,6 +167,7 @@ static void initGraphics(void)
     sceDisplayWaitVblankStart();
     sceGuDisplay(GU_TRUE);
 }
+
 /* Fonte bitmap 5x7. */
 static const unsigned char font5x7[36][5] = {
     {0x7E,0x11,0x11,0x11,0x7E},
@@ -256,82 +260,80 @@ static void worldRect(
     unsigned short color)
 {
     rectangle(
-        x - cameraX, y - cameraY,
+        x - cameraX,
+        y - cameraY,
         w, h, color);
 }
 
-/* Humanoide geométrico original. */
+/* Personagem geométrico original. */
 static void drawAngularHumanoid(void)
 {
     int x = (int)playerX;
     int y = (int)playerY;
 
-    /* Cabeça angular */
     worldRect(x + 6, y, 12, 10, WHITE);
     worldRect(x + 4, y + 2, 2, 6, LIGHT);
     worldRect(x + 18, y + 2, 2, 6, LIGHT);
 
-    /* Tronco */
     worldRect(x + 4, y + 10, 16, 14, WHITE);
     worldRect(x + 8, y + 13, 8, 2, BLACK);
 
-    /* Braços */
     worldRect(x, y + 11, 5, 13, LIGHT);
     worldRect(x + 20, y + 11, 5, 13, LIGHT);
 
-    /* Pernas */
     worldRect(x + 5, y + 24, 6, 13, WHITE);
     worldRect(x + 14, y + 24, 6, 13, WHITE);
 
-    /* Rosto */
     worldRect(x + 9, y + 3, 2, 2, BLACK);
     worldRect(x + 14, y + 3, 2, 2, BLACK);
 }
 
-/* Caverna geométrica fechada, com teto e piso espessos. */
+/* Caverna fechada. */
 static void drawCave(void)
 {
     int x;
     unsigned short rock = rgb(35,35,35);
 
-    /* Teto contínuo */
-    worldRect(0, 0, WORLD_W, 105, rock);
-    worldRect(0, 105, WORLD_W, 5, WHITE);
+    /* Teto */
+    worldRect(0, 0, WORLD_W, 55, rock);
+    worldRect(0, 55, WORLD_W, 4, WHITE);
 
     for (x = 0; x < WORLD_W; x += 96) {
-        worldRect(x + 12, 110, 35, 3, GRAY);
-        worldRect(x + 47, 110, 3, 18, GRAY);
+        worldRect(x + 12, 60, 35, 3, GRAY);
+        worldRect(x + 47, 60, 3, 14, GRAY);
     }
 
-    /* Parede de entrada e parede final */
-    worldRect(0, 100, 34, 410, rock);
-    worldRect(0, 100, 34, 5, WHITE);
+    /* Paredes laterais */
+    worldRect(0, 55, 34, 220, rock);
+    worldRect(WORLD_W - 34, 55, 34, 220, rock);
 
-    worldRect(WORLD_W - 34, 100, 34, 410, rock);
-    worldRect(WORLD_W - 34, 100, 34, 5, WHITE);
+    /* Piso */
+    worldRect(0, 235, WORLD_W, 90, rock);
+    worldRect(0, 235, WORLD_W, 4, WHITE);
 
-    /* Chão grosso */
-    worldRect(0, 410, WORLD_W, 150, rock);
-    worldRect(0, 410, WORLD_W, 5, WHITE);
-
-    /* Textura angular no piso */
+    /* Marcas no piso */
     for (x = 50; x < WORLD_W; x += 90) {
-        worldRect(x, 430, 2, 30, GRAY);
-        worldRect(x + 2, 460, 28, 2, GRAY);
-        worldRect(x + 30, 462, 2, 22, GRAY);
+        worldRect(x, 250, 2, 12, GRAY);
+        worldRect(x + 2, 262, 28, 2, GRAY);
     }
 
-    /* Pilares geométricos no fundo */
+    /* Pilares ao fundo */
     for (x = 170; x < WORLD_W; x += 360) {
-        worldRect(x, 160, 8, 130, DARK);
-        worldRect(x, 160, 42, 4, GRAY);
-        worldRect(x + 38, 164, 4, 38, GRAY);
+        worldRect(x, 100, 8, 100, DARK);
+        worldRect(x, 100, 42, 4, GRAY);
+        worldRect(x + 38, 104, 4, 28, GRAY);
     }
 
-    /* Plataformas opcionais e baixas */
+    /* Plataformas suspensas */
     for (x = 0; x < (int)PLATFORM_COUNT; ++x) {
-        Platform p = platforms
-/* Símbolo mágico geométrico em preto e branco. */
+        Platform p = platforms[x];
+
+        if (p.y < 235)
+            worldRect(p.x, p.y, p.w, p.h, WHITE);
+    }
+}
+
+/* Símbolo mágico. */
 static void drawMagicSymbol(void)
 {
     worldRect(magicX, magicY - 10, 4, 24, WHITE);
@@ -347,13 +349,15 @@ static void drawShots(void)
 
     for (i = 0; i < MAX_SHOTS; ++i) {
         if (shots[i].active) {
-            worldRect((int)shots[i].x,
-                      (int)shots[i].y,
-                      12, 4, WHITE);
+            worldRect(
+                (int)shots[i].x,
+                (int)shots[i].y,
+                12, 4, WHITE);
 
-            worldRect((int)shots[i].x + 3,
-                      (int)shots[i].y - 3,
-                      6, 10, GRAY);
+            worldRect(
+                (int)shots[i].x + 3,
+                (int)shots[i].y - 3,
+                6, 10, GRAY);
         }
     }
 }
@@ -399,7 +403,6 @@ static void drawMenu(void)
 {
     beginFrame();
 
-    /* Moldura geométrica */
     rectangle(24, 22, 3, 226, GRAY);
     rectangle(24, 22, 432, 3, GRAY);
     rectangle(429, 22, 3, 226, GRAY);
@@ -447,7 +450,6 @@ static void drawGame(void)
     drawShots();
     drawAngularHumanoid();
 
-    /* HUD monocromático */
     rectangle(8, 8, 120, 18, DARK);
     rectangle(8, 8, 120, 2, LIGHT);
 
@@ -491,7 +493,7 @@ static void updateGame(unsigned int buttons)
         }
     }
 
-    /* Magia no botão CIRCLE */
+    /* Magia no CIRCLE */
     if (justPressed(buttons, PSP_CTRL_CIRCLE))
         fireMagic();
 
@@ -524,17 +526,17 @@ static void updateGame(unsigned int buttons)
         }
     }
 
-    /* Colisão com o teto */
-    if (playerY < 110) {
-        playerY = 110;
+    /* Teto */
+    if (playerY < 59) {
+        playerY = 59;
 
         if (velocityY < 0)
             velocityY = 0;
     }
 
-    /* Chão contínuo */
-    if (playerY + PLAYER_H > 410) {
-        playerY = 410 - PLAYER_H;
+    /* Piso */
+    if (playerY + PLAYER_H > 235) {
+        playerY = 235 - PLAYER_H;
         velocityY = 0;
         grounded = 1;
         doubleJumpUsed = 0;
@@ -553,8 +555,9 @@ static void updateGame(unsigned int buttons)
 
     updateShots();
 
-    /* Câmera horizontal mais distante e vertical estável */
-    cameraX = (int)(playerX + PLAYER_W / 2) - SW / 2;
+    /* Câmera horizontal */
+    cameraX =
+        (int)(playerX + PLAYER_W / 2) - SW / 2;
 
     if (cameraX < 0)
         cameraX = 0;
@@ -562,7 +565,8 @@ static void updateGame(unsigned int buttons)
     if (cameraX > WORLD_W - SW)
         cameraX = WORLD_W - SW;
 
-    cameraY = 95;
+    /* Câmera vertical fixa */
+    cameraY = 0;
 }
 
 int main(void)
@@ -595,12 +599,19 @@ int main(void)
                 screen = 2;
 
                 playerX = 60.0f;
-                playerY = 372.0f;
+                playerY = 197.0f;
                 velocityY = 0.0f;
-                grounded = 0;
+                grounded = 1;
                 doubleJumpUsed = 0;
+
+                magicUnlocked = 0;
+                magicTaken = 0;
+                shotCooldown = 0;
+
+                memset(shots, 0, sizeof(shots));
+
                 cameraX = 0;
-                cameraY = 95;
+                cameraY = 0;
             }
 
         } else {
