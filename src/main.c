@@ -2,11 +2,10 @@
 #include <pspkernel.h>
 #include <pspdisplay.h>
 #include <pspgu.h>
-#include <pspgum.h>
 #include <pspctrl.h>
+#include <pspdebug.h>
 #include <math.h>
 #include <string.h>
-#include <stdlib.h>
 
 PSP_MODULE_INFO("RANDOM", 0, 1, 0);
 PSP_MAIN_THREAD_ATTR(THREAD_ATTR_USER);
@@ -14,86 +13,73 @@ PSP_MAIN_THREAD_ATTR(THREAD_ATTR_USER);
 #define SW 480
 #define SH 272
 #define BUF_WIDTH 512
-#define SCREEN_SIZE (BUF_WIDTH * 272)
-#define MAX_OBJECTS 12
 #define MAX_SHOTS 6
-#define ROOM_COUNT 3
+#define MAX_OBJECTS 12
+#define WORLD_W 1500.0f
+#define PLAYER_W 20.0f
+#define PLAYER_H 34.0f
 
 #define WHITE 0xFFFFFFFF
-#define BLACK 0xFF000000
 #define GRAY  0xFF888888
 #define DARK  0xFF333333
-
-typedef struct {
-    float x, y, w, h;
-} Rect;
-
-typedef struct {
-    float x, y;
-    float vx, vy;
-    int active;
-    int target;
-} Shot;
-
-typedef struct {
-    float x, y;
-    float w, h;
-    int active;
-    int room;
-} MagicObject;
+#define BLACK 0xFF000000
 
 typedef struct {
     unsigned int color;
     float x, y, z;
 } Vertex;
 
+typedef struct {
+    float x, y, w, h;
+} Rect;
+
+typedef struct {
+    float x, y, vx, vy;
+    int active;
+    int target;
+} Shot;
+
+typedef struct {
+    float x, y, w, h;
+    int active;
+    int room;
+} MagicObject;
+
 static unsigned int __attribute__((aligned(16)))
 displayList[262144];
 
-static unsigned int __attribute__((aligned(16)))
-framebuffer[2][SCREEN_SIZE];
-
+static int gameState = 0;
 static int frameIndex = 0;
+static int currentRoom = 0;
 
 static float playerX = 35.0f;
-static float playerY = 180.0f;
-static float playerVX = 0.0f;
+static float playerY = 202.0f;
 static float playerVY = 0.0f;
+static float cameraX = 0.0f;
 
 static int grounded = 0;
 static int jumps = 0;
 static int magicUnlocked = 0;
-static int gameState = 0;
-static int currentRoom = 0;
 static int shotCooldown = 0;
-
-static float cameraX = 0.0f;
-static float cameraY = 0.0f;
-
-static const float PLAYER_W = 20.0f;
-static const float PLAYER_H = 34.0f;
 
 static Shot shots[MAX_SHOTS];
 
 static MagicObject objects[MAX_OBJECTS] = {
-    {145, 177, 12, 12, 1, 0},
-    {235, 132, 12, 12, 1, 0},
-    {410, 175, 12, 12, 1, 0},
+    {145,177,12,12,1,0},
+    {235,132,12,12,1,0},
+    {410,175,12,12,1,0},
 
-    {555, 157, 12, 12, 1, 1},
-    {655, 112, 12, 12, 1, 1},
-    {765, 168, 12, 12, 1, 1},
-    {850, 135, 12, 12, 1, 1},
+    {555,157,12,12,1,1},
+    {655,112,12,12,1,1},
+    {765,168,12,12,1,1},
+    {850,135,12,12,1,1},
 
-    {1035, 164, 12, 12, 1, 2},
-    {1145, 110, 12, 12, 1, 2},
-    {1255, 150, 12, 12, 1, 2},
-    {1350, 112, 12, 12, 1, 2},
-    {1430, 172, 12, 12, 1, 2}
+    {1035,164,12,12,1,2},
+    {1145,110,12,12,1,2},
+    {1255,150,12,12,1,2},
+    {1350,112,12,12,1,2},
+    {1430,172,12,12,1,2}
 };
-
-static const float WORLD_W = 1500.0f;
-static const float FLOOR_Y = 236.0f;
 
 static void initGraphics(void)
 {
@@ -108,23 +94,22 @@ static void initGraphics(void)
     );
 
     sceGuDispBuffer(
-        SW,
-        SH,
+        SW, SH,
         (void *)0x88000,
         BUF_WIDTH
     );
 
-    sceGuOffset(2048 - (SW / 2), 2048 - (SH / 2));
+    sceGuOffset(2048 - SW / 2, 2048 - SH / 2);
     sceGuViewport(2048, 2048, SW, SH);
-
-    sceGuDepthRange(65535, 0);
     sceGuScissor(0, 0, SW, SH);
-    sceGuEnable(GU_SCISSOR_TEST);
 
+    sceGuEnable(GU_SCISSOR_TEST);
     sceGuDisable(GU_DEPTH_TEST);
     sceGuDisable(GU_CULL_FACE);
     sceGuDisable(GU_TEXTURE_2D);
-    sceGuShadeModel(GU_FLAT);
+
+    sceGuClearColor(BLACK);
+    sceGuClear(GU_COLOR_BUFFER_BIT);
 
     sceGuFinish();
     sceGuSync(0, 0);
@@ -151,16 +136,14 @@ static void endFrame(void)
 {
     sceGuFinish();
     sceGuSync(0, 0);
-
     sceDisplayWaitVblankStart();
-
     sceGuSwapBuffers();
+
     frameIndex ^= 1;
 }
 
 static void rectangle(
-    float x, float y,
-    float w, float h,
+    float x, float y, float w, float h,
     unsigned int color
 )
 {
@@ -188,25 +171,68 @@ static void rectangle(
 }
 
 static void worldRect(
-    float x, float y,
-    float w, float h,
+    float x, float y, float w, float h,
     unsigned int color
 )
 {
     rectangle(
         x - cameraX,
-        y - cameraY,
-        w, h, color
+        y,
+        w, h,
+        color
     );
 }
 
-static void lineRect(
-    float x, float y,
-    float w, float h,
-    unsigned int color
-)
+/* Fonte bitmap compacta */
+static const unsigned char font5x7[][5] = {
+    {0,0,0,0,0},
+    {0x3E,0x51,0x49,0x45,0x3E}, /* 0 */
+    {0,0x42,0x7F,0x40,0},       /* 1 */
+    {0x42,0x61,0x51,0x49,0x46}, /* 2 */
+    {0x21,0x41,0x45,0x4B,0x31}, /* 3 */
+    {0x18,0x14,0x12,0x7F,0x10}, /* 4 */
+    {0x27,0x45,0x45,0x45,0x39}, /* 5 */
+    {0x3C,0x4A,0x49,0x49,0x30}, /* 6 */
+    {0x01,0x71,0x09,0x05,0x03}, /* 7 */
+    {0x36,0x49,0x49,0x49,0x36}, /* 8 */
+    {0x06,0x49,0x49,0x29,0x1E}, /* 9 */
+    {0x7E,0x11,0x11,0x11,0x7E}, /* A */
+    {0x7F,0x49,0x49,0x49,0x36}, /* B */
+    {0x3E,0x41,0x41,0x41,0x22}, /* C */
+    {0x7F,0x41,0x41,0x22,0x1C}, /* D */
+    {0x7F,0x49,0x49,0x49,0x41}, /* E */
+    {0x7F,0x09,0x09,0x09,0x01}, /* F */
+    {0x3E,0x41,0x49,0x49,0x7A}, /* G */
+    {0x7F,0x08,0x08,0x08,0x7F}, /* H */
+    {0x41,0x41,0x7F,0x41,0x41}, /* I */
+    {0x20,0x40,0x41,0x3F,0x01}, /* J */
+    {0x7F,0x08,0x14,0x22,0x41}, /* K */
+    {0x7F,0x40,0x40,0x40,0x40}, /* L */
+    {0x7F,0x02,0x0C,0x02,0x7F}, /* M */
+    {0x7F,0x04,0x08,0x10,0x7F}, /* N */
+    {0x3E,0x41,0x41,0x41,0x3E}, /* O */
+    {0x7F,0x09,0x09,0x09,0x06}, /* P */
+    {0x3E,0x41,0x51,0x21,0x5E}, /* Q */
+    {0x7F,0x09,0x19,0x29,0x46}, /* R */
+    {0x46,0x49,0x49,0x49,0x31}, /* S */
+    {0x01,0x01,0x7F,0x01,0x01}, /* T */
+    {0x3F,0x40,0x40,0x40,0x3F}, /* U */
+    {0x1F,0x20,0x40,0x20,0x1F}, /* V */
+    {0x3F,0x40,0x38,0x40,0x3F}, /* W */
+    {0x63,0x14,0x08,0x14,0x63}, /* X */
+    {0x07,0x08,0x70,0x08,0x07}, /* Y */
+    {0x61,0x51,0x49,0x45,0x43}  /* Z */
+};
+
+static int charIndex(char c)
 {
-    worldRect(x, y, w, h, color);
+    if (c >= '0' && c <= '9')
+        return 1 + c - '0';
+
+    if (c >= 'A' && c <= 'Z')
+        return 11 + c - 'A';
+
+    return 0;
 }
 
 static void drawText(
@@ -216,13 +242,20 @@ static void drawText(
 )
 {
     while (*text) {
-        unsigned char c = (unsigned char)*text++;
+        char c = *text++;
 
-        for (int row = 0; row < 5; row++) {
-            unsigned char bits = (c >> (row % 6));
+        if (c == ' ') {
+            x += 8;
+            continue;
+        }
 
-            for (int col = 0; col < 4; col++) {
-                if (bits & (1 << col)) {
+        int index = charIndex(c);
+
+        for (int col = 0; col < 5; col++) {
+            unsigned char bits = font5x7[index][col];
+
+            for (int row = 0; row < 7; row++) {
+                if (bits & (1 << row)) {
                     rectangle(
                         x + col * 2,
                         y + row * 2,
@@ -232,11 +265,17 @@ static void drawText(
             }
         }
 
-        x += 7;
-
-        if (x > SW - 8)
-            break;
+        x += 12;
     }
+}
+
+static void drawPlatform(float x, float y, float w)
+{
+    worldRect(x, y, w, 5, WHITE);
+    worldRect(x, y + 5, w, 3, GRAY);
+
+    for (float i = 8; i < w; i += 24)
+        worldRect(x + i, y + 8, 2, 5, DARK);
 }
 
 static void drawCrystal(float x, float y)
@@ -262,34 +301,13 @@ static void drawCracks(float x, float y)
     worldRect(x + 12, y + 11, 2, 6, GRAY);
 }
 
-static void drawPlatform(float x, float y, float w)
-{
-    worldRect(x, y, w, 5, WHITE);
-    worldRect(x, y + 5, w, 3, GRAY);
-
-    for (float i = 8; i < w; i += 24) {
-        worldRect(x + i, y + 8, 2, 5, DARK);
-    }
-}
-
 static void drawRoomBackground(int room)
 {
     for (int i = 0; i < 7; i++) {
         float x = room * 500 + i * 70;
 
-        worldRect(
-            x,
-            45 + (i % 3) * 12,
-            30, 3,
-            DARK
-        );
-
-        worldRect(
-            x + 17,
-            48 + (i % 3) * 12,
-            3, 10,
-            GRAY
-        );
+        worldRect(x, 45 + (i % 3) * 12, 30, 3, DARK);
+        worldRect(x + 17, 48 + (i % 3) * 12, 3, 10, GRAY);
     }
 
     drawCrystal(room * 500 + 95, 205);
@@ -301,7 +319,6 @@ static void drawRoomBackground(int room)
 
 static void drawRoom0(void)
 {
-    /* Sala 1: área inicial */
     drawRoomBackground(0);
 
     drawPlatform(0, 236, 95);
@@ -318,7 +335,6 @@ static void drawRoom0(void)
     drawSpike(185, 236, 18);
     drawSpike(287, 236, 14);
 
-    /* Teto quebrado */
     worldRect(0, 0, 120, 35, WHITE);
     worldRect(0, 35, 95, 8, GRAY);
     worldRect(135, 0, 85, 20, WHITE);
@@ -330,7 +346,6 @@ static void drawRoom0(void)
 
 static void drawRoom1(void)
 {
-    /* Sala 2: caverna quebrada */
     drawRoomBackground(1);
 
     drawPlatform(500, 236, 65);
@@ -351,7 +366,6 @@ static void drawRoom1(void)
     drawSpike(740, 236, 20);
     drawSpike(905, 236, 16);
 
-    /* Estalactites */
     worldRect(510, 0, 75, 24, WHITE);
     worldRect(530, 24, 35, 9, GRAY);
     worldRect(620, 0, 100, 17, WHITE);
@@ -363,7 +377,6 @@ static void drawRoom1(void)
 
 static void drawRoom2(void)
 {
-    /* Sala 3: zona 1 e saída */
     drawRoomBackground(2);
 
     drawPlatform(1000, 236, 80);
@@ -383,7 +396,6 @@ static void drawRoom2(void)
     drawSpike(1210, 236, 18);
     drawSpike(1305, 236, 14);
 
-    /* Parede e saída */
     worldRect(1460, 70, 40, 166, WHITE);
     worldRect(1460, 70, 40, 8, GRAY);
 
@@ -393,32 +405,25 @@ static void drawRoom2(void)
 
     worldRect(1430, 178, 18, 18, WHITE);
     worldRect(1435, 183, 8, 8, BLACK);
+
+    drawText(1380 - (int)cameraX, 95, "EXIT", WHITE);
 }
 
 static void drawCave(void)
 {
-    worldRect(0, 0, WORLD_W, 4, WHITE);
-
     drawRoom0();
     drawRoom1();
     drawRoom2();
 
-    /* Passagens entre as salas */
     worldRect(490, 190, 20, 46, BLACK);
     worldRect(990, 190, 20, 46, BLACK);
-
-    /* Identificação visual das salas */
-    worldRect(12, 55, 2, 18, GRAY);
-    worldRect(512, 55, 2, 18, GRAY);
-    worldRect(1012, 55, 2, 18, GRAY);
 }
 
 static void drawPlayer(void)
 {
     float x = playerX - cameraX;
-    float y = playerY - cameraY;
+    float y = playerY;
 
-    /* Corpo geométrico */
     rectangle(x + 5, y, 10, 10, WHITE);
     rectangle(x + 3, y + 10, 14, 13, GRAY);
 
@@ -428,7 +433,6 @@ static void drawPlayer(void)
     rectangle(x + 4, y + 23, 5, 11, WHITE);
     rectangle(x + 12, y + 23, 5, 11, WHITE);
 
-    /* Olhos */
     rectangle(x + 7, y + 4, 2, 2, BLACK);
     rectangle(x + 12, y + 4, 2, 2, BLACK);
 }
@@ -441,7 +445,6 @@ static void drawObjects(void)
         if (!o->active)
             continue;
 
-        /* Núcleo e anel */
         worldRect(o->x - 3, o->y - 3, o->w + 6, 2, GRAY);
         worldRect(o->x - 3, o->y + o->h + 1, o->w + 6, 2, GRAY);
         worldRect(o->x - 3, o->y - 3, 2, o->h + 6, GRAY);
@@ -455,7 +458,7 @@ static void drawObjects(void)
 static int nearestObject(void)
 {
     int nearest = -1;
-    float bestDistance = 999999.0f;
+    float best = 999999.0f;
 
     float px = playerX + PLAYER_W / 2;
     float py = playerY + PLAYER_H / 2;
@@ -464,15 +467,12 @@ static int nearestObject(void)
         if (!objects[i].active)
             continue;
 
-        float ox = objects[i].x + objects[i].w / 2;
-        float oy = objects[i].y + objects[i].h / 2;
-
-        float dx = ox - px;
-        float dy = oy - py;
+        float dx = objects[i].x + objects[i].w / 2 - px;
+        float dy = objects[i].y + objects[i].h / 2 - py;
         float d = dx * dx + dy * dy;
 
-        if (d < bestDistance) {
-            bestDistance = d;
+        if (d < best) {
+            best = d;
             nearest = i;
         }
     }
@@ -491,13 +491,10 @@ static void fireMagic(void)
         if (!shots[i].active) {
             shots[i].x = playerX + PLAYER_W / 2;
             shots[i].y = playerY + PLAYER_H / 2;
-
             shots[i].vx = 4.0f;
             shots[i].vy = 0.0f;
-
             shots[i].target = target;
             shots[i].active = 1;
-
             shotCooldown = 15;
             return;
         }
@@ -521,28 +518,19 @@ static void updateShots(void)
 
         MagicObject *o = &objects[s->target];
 
-        float tx = o->x + o->w / 2;
-        float ty = o->y + o->h / 2;
+        float dx = o->x + o->w / 2 - s->x;
+        float dy = o->y + o->h / 2 - s->y;
+        float distance = sqrtf(dx * dx + dy * dy);
 
-        float sx = s->x;
-        float sy = s->y;
-
-        float dx = tx - sx;
-        float dy = ty - sy;
-        float length = sqrtf(dx * dx + dy * dy);
-
-        if (length < 9.0f) {
+        if (distance < 9.0f) {
             o->active = 0;
             s->active = 0;
             continue;
         }
 
-        /* A magia curva a trajetória até o alvo */
-        if (length > 0.01f) {
-            float speed = 5.0f;
-
-            float desiredVX = (dx / length) * speed;
-            float desiredVY = (dy / length) * speed;
+        if (distance > 0.01f) {
+            float desiredVX = dx / distance * 5.0f;
+            float desiredVY = dy / distance * 5.0f;
 
             s->vx += (desiredVX - s->vx) * 0.22f;
             s->vy += (desiredVY - s->vy) * 0.22f;
@@ -551,10 +539,8 @@ static void updateShots(void)
         s->x += s->vx;
         s->y += s->vy;
 
-        if (s->x < 0 ||
-            s->x > WORLD_W ||
-            s->y < 0 ||
-            s->y > 272) {
+        if (s->x < 0 || s->x > WORLD_W ||
+            s->y < 0 || s->y > SH) {
             s->active = 0;
         }
     }
@@ -567,11 +553,10 @@ static void drawShots(void)
             continue;
 
         float x = shots[i].x - cameraX;
-        float y = shots[i].y - cameraY;
+        float y = shots[i].y;
 
         rectangle(x - 5, y - 2, 10, 4, GRAY);
         rectangle(x - 2, y - 4, 4, 8, WHITE);
-
         rectangle(x - shots[i].vx * 2,
                   y - shots[i].vy * 2,
                   3, 3, GRAY);
@@ -582,13 +567,13 @@ static void drawMenu(void)
 {
     rectangle(0, 0, SW, SH, BLACK);
 
-    rectangle(70, 50, 340, 4, WHITE);
-    rectangle(70, 54, 4, 45, GRAY);
-    rectangle(406, 54, 4, 45, GRAY);
+    rectangle(65, 48, 350, 4, WHITE);
+    rectangle(65, 52, 4, 48, GRAY);
+    rectangle(411, 52, 4, 48, GRAY);
 
-    drawText(170, 70, "RANDOM", WHITE);
-    drawText(125, 130, "PRESS START", WHITE);
-    drawText(105, 165, "3 CONNECTED ROOMS", GRAY);
+    drawText(174, 68, "RANDOM", WHITE);
+    drawText(143, 125, "PRESS START", WHITE);
+    drawText(120, 160, "3 CONNECTED ROOMS", GRAY);
 
     rectangle(120, 215, 240, 3, WHITE);
 }
@@ -597,11 +582,12 @@ static void drawIntro(void)
 {
     rectangle(0, 0, SW, SH, BLACK);
 
-    drawText(110, 65, "RANDOM", WHITE);
-    drawText(75, 105, "EXPLORE THE CAVE", WHITE);
-    drawText(70, 135, "CROSS: JUMP", GRAY);
-    drawText(70, 155, "CIRCLE: MAGIC", GRAY);
-    drawText(70, 185, "START: MENU", GRAY);
+    drawText(174, 55, "RANDOM", WHITE);
+    drawText(120, 95, "EXPLORE THE CAVE", WHITE);
+    drawText(90, 130, "X JUMP", GRAY);
+    drawText(90, 150, "O MAGIC", GRAY);
+    drawText(90, 180, "START MENU", GRAY);
+    drawText(100, 225, "PRESS START", WHITE);
 }
 
 static void drawGame(void)
@@ -613,18 +599,16 @@ static void drawGame(void)
     drawShots();
     drawPlayer();
 
-    if (!magicUnlocked) {
-        drawText(8, 8, "FIND MAGIC", WHITE);
-    } else {
-        drawText(8, 8, "MAGIC READY", WHITE);
-    }
+    drawText(8, 8,
+        magicUnlocked ? "MAGIC READY" : "FIND MAGIC",
+        WHITE);
 
     if (currentRoom == 0)
-        drawText(180, 8, "START", GRAY);
+        drawText(190, 8, "START", GRAY);
     else if (currentRoom == 1)
-        drawText(180, 8, "CAVE", GRAY);
+        drawText(190, 8, "CAVE", GRAY);
     else
-        drawText(180, 8, "ZONE 1", GRAY);
+        drawText(190, 8, "ZONE 1", GRAY);
 
     endFrame();
 }
@@ -640,22 +624,17 @@ static int overlaps(
            ay + ah > by;
 }
 
-static void updateGame(SceCtrlData pad)
+static void updateGame(SceCtrlData pad, unsigned int pressed)
 {
-    const unsigned int left = PSP_CTRL_LEFT;
-    const unsigned int right = PSP_CTRL_RIGHT;
-    const unsigned int jump = PSP_CTRL_CROSS;
-    const unsigned int magic = PSP_CTRL_CIRCLE;
+    float vx = 0;
 
-    playerVX = 0;
+    if (pad.Buttons & PSP_CTRL_LEFT)
+        vx = -2.5f;
 
-    if (pad.Buttons & left)
-        playerVX = -2.5f;
+    if (pad.Buttons & PSP_CTRL_RIGHT)
+        vx = 2.5f;
 
-    if (pad.Buttons & right)
-        playerVX = 2.5f;
-
-    playerX += playerVX;
+    playerX += vx;
 
     if (playerX < 0)
         playerX = 0;
@@ -663,52 +642,56 @@ static void updateGame(SceCtrlData pad)
     if (playerX > WORLD_W - PLAYER_W)
         playerX = WORLD_W - PLAYER_W;
 
-    if ((pad.Buttons & jump) && grounded) {
+    if ((pressed & PSP_CTRL_CROSS) && grounded) {
         playerVY = -7.5f;
         grounded = 0;
         jumps = 1;
-    }
-
-    /* Pulo duplo */
-    static int jumpWasPressed = 0;
-    int jumpPressed = (pad.Buttons & jump) != 0;
-
-    if (jumpPressed && !jumpWasPressed &&
-        !grounded && jumps < 2) {
+    } else if ((pressed & PSP_CTRL_CROSS) && jumps < 2) {
         playerVY = -7.0f;
+        grounded = 0;
         jumps++;
     }
-
-    jumpWasPressed = jumpPressed;
 
     playerVY += 0.32f;
 
     if (playerVY > 7.0f)
         playerVY = 7.0f;
 
+    float oldBottom = playerY + PLAYER_H;
     playerY += playerVY;
     grounded = 0;
 
-    /* Piso segmentado das três salas */
     Rect floors[] = {
-        {0, 236, 95, 36},
-        {110, 236, 70, 36},
-        {195, 236, 305, 36},
-        {500, 236, 65, 36},
-        {665, 236, 70, 36},
-        {820, 236, 85, 36},
-        {1000, 236, 80, 36},
-        {1230, 236, 70, 36},
-        {1400, 236, 100, 36}
+        {0,236,95,36},
+        {110,236,70,36},
+        {195,236,305,36},
+        {500,236,65,36},
+        {665,236,70,36},
+        {820,236,85,36},
+        {1000,236,80,36},
+        {1230,236,70,36},
+        {1400,236,100,36}
+    };
+
+    Rect platforms[] = {
+        {70,194,42,6},{142,165,48,6},
+        {225,190,45,6},{340,155,50,6},
+        {420,195,45,6},{535,180,42,6},
+        {625,145,55,6},{720,170,35,6},
+        {795,130,48,6},{885,165,40,6},
+        {950,180,45,6},{1040,170,45,6},
+        {1130,145,40,6},{1210,115,55,6},
+        {1300,160,45,6},{1380,130,45,6}
     };
 
     for (int i = 0; i < (int)(sizeof(floors) / sizeof(floors[0])); i++) {
         Rect f = floors[i];
 
         if (playerVY >= 0 &&
-            overlaps(playerX, playerY + PLAYER_H,
-                     PLAYER_W, 1,
-                     f.x, f.y, f.w, f.h)) {
+            oldBottom <= f.y + 2 &&
+            playerY + PLAYER_H >= f.y &&
+            playerX + PLAYER_W > f.x &&
+            playerX < f.x + f.w) {
             playerY = f.y - PLAYER_H;
             playerVY = 0;
             grounded = 1;
@@ -716,35 +699,14 @@ static void updateGame(SceCtrlData pad)
         }
     }
 
-    /* Plataformas suspensas */
-    Rect platforms[] = {
-        {70,194,42,6},
-        {142,165,48,6},
-        {225,190,45,6},
-        {340,155,50,6},
-        {420,195,45,6},
-
-        {535,180,42,6},
-        {625,145,55,6},
-        {720,170,35,6},
-        {795,130,48,6},
-        {885,165,40,6},
-        {950,180,45,6},
-
-        {1040,170,45,6},
-        {1130,145,40,6},
-        {1210,115,55,6},
-        {1300,160,45,6},
-        {1380,130,45,6}
-    };
-
     for (int i = 0; i < (int)(sizeof(platforms) / sizeof(platforms[0])); i++) {
         Rect p = platforms[i];
 
         if (playerVY >= 0 &&
-            overlaps(playerX, playerY + PLAYER_H,
-                     PLAYER_W, 1,
-                     p.x, p.y, p.w, p.h)) {
+            oldBottom <= p.y + 2 &&
+            playerY + PLAYER_H >= p.y &&
+            playerX + PLAYER_W > p.x &&
+            playerX < p.x + p.w) {
             playerY = p.y - PLAYER_H;
             playerVY = 0;
             grounded = 1;
@@ -752,10 +714,9 @@ static void updateGame(SceCtrlData pad)
         }
     }
 
-    /* Coletar magia na sala inicial */
     if (!magicUnlocked &&
-        playerX > 120 && playerX < 180 &&
-        playerY > 130) {
+        overlaps(playerX, playerY, PLAYER_W, PLAYER_H,
+                 130, 165, 35, 30)) {
         magicUnlocked = 1;
     }
 
@@ -763,7 +724,7 @@ static void updateGame(SceCtrlData pad)
         shotCooldown--;
 
     if (magicUnlocked &&
-        (pad.Buttons & magic) &&
+        (pressed & PSP_CTRL_CIRCLE) &&
         shotCooldown == 0) {
         fireMagic();
     }
@@ -772,11 +733,10 @@ static void updateGame(SceCtrlData pad)
 
     if (playerY > SH + 100) {
         playerX = 35;
-        playerY = 180;
+        playerY = 202;
         playerVY = 0;
     }
 
-    /* Câmera acompanha o personagem */
     cameraX = playerX - 210;
 
     if (cameraX < 0)
@@ -785,8 +745,6 @@ static void updateGame(SceCtrlData pad)
     if (cameraX > WORLD_W - SW)
         cameraX = WORLD_W - SW;
 
-    cameraY = 0;
-
     if (playerX < 500)
         currentRoom = 0;
     else if (playerX < 1000)
@@ -794,10 +752,9 @@ static void updateGame(SceCtrlData pad)
     else
         currentRoom = 2;
 
-    /* Chegada à saída */
     if (playerX > 1440) {
         playerX = 35;
-        playerY = 180;
+        playerY = 202;
         playerVY = 0;
         magicUnlocked = 0;
 
@@ -812,38 +769,45 @@ static void updateGame(SceCtrlData pad)
 int main(void)
 {
     SceCtrlData pad;
+    unsigned int previousButtons = 0;
 
     sceCtrlSetSamplingCycle(0);
     sceCtrlSetSamplingMode(PSP_CTRL_MODE_ANALOG);
 
     initGraphics();
-
     memset(shots, 0, sizeof(shots));
 
     while (1) {
         sceCtrlReadBufferPositive(&pad, 1);
+
+        unsigned int pressed =
+            pad.Buttons & ~previousButtons;
+
+        previousButtons = pad.Buttons;
 
         if (gameState == 0) {
             beginFrame();
             drawMenu();
             endFrame();
 
-            if (pad.Buttons & PSP_CTRL_START)
+            if (pressed & PSP_CTRL_START)
                 gameState = 1;
-        } else if (gameState == 1) {
+        }
+        else if (gameState == 1) {
             beginFrame();
             drawIntro();
             endFrame();
 
-            if (pad.Buttons & PSP_CTRL_START)
+            if (pressed & PSP_CTRL_START)
                 gameState = 2;
-        } else {
-            if (pad.Buttons & PSP_CTRL_START) {
+        }
+        else {
+            if (pressed & PSP_CTRL_START) {
                 gameState = 0;
                 continue;
             }
 
-            updateGame(pad);
+            updateGame(pad, pressed);
             drawGame();
         }
     }
