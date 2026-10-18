@@ -1,108 +1,49 @@
 
 #include <pspkernel.h>
-#include <pspdisplay.h>
+#include <pspdebug.h>
 #include <pspctrl.h>
-#include <pspgu.h>
-#include <pspgum.h>
+#include <pspdisplay.h>
 #include <stdio.h>
 #include <string.h>
-#include <math.h>
 
 PSP_MODULE_INFO("RANDOM", 0, 1, 0);
 PSP_MAIN_THREAD_ATTR(THREAD_ATTR_USER);
 
-#define W 480
-#define H 272
-#define BUF_WIDTH 512
-#define PIXEL_SIZE 4
-#define FRAME_SIZE (BUF_WIDTH * H * PIXEL_SIZE)
+enum {
+    MENU,
+    INTRO,
+    GAME,
+    OPTIONS
+};
 
-static unsigned int __attribute__((aligned(16))) list[262144];
-static unsigned int __attribute__((aligned(16))) framebuffer[BUF_WIDTH * H];
-
-typedef struct {
-    float x, y, w, h;
-    unsigned int color;
-} Rect;
-
-static int screen = 0;
+static int screen = MENU;
 static int selected = 0;
-static float playerX = 70;
-static float playerY = 210;
-static float velocityY = 0;
-static int onGround = 1;
-static int introTimer = 0;
+static int introStep = 0;
+static int introFrames = 0;
+static int playerX = 8;
+static int playerY = 10;
+static int jumping = 0;
+static int jumpVelocity = 0;
+static int previousButtons = 0;
 
-static unsigned int rgba(
-    unsigned char r, unsigned char g,
-    unsigned char b, unsigned char a
-) {
-    return (a << 24) | (b << 16) | (g << 8) | r;
+static int pressed(int buttons, int key) {
+    return (buttons & key) && !(previousButtons & key);
 }
 
-static void rect(float x, float y, float w, float h,
-                 unsigned int color) {
-    sceGuColor(color);
-    sceGuDisable(GU_TEXTURE_2D);
-    sceGuDrawBuffer(GU_PSM_8888, (void*)0, BUF_WIDTH);
-    sceGuFinish();
-    sceGuSync(0, 0);
-
-    typedef struct {
-        short x, y, z;
-    } Vertex;
-
-    Vertex *v = (Vertex*)sceGuGetMemory(2 * sizeof(Vertex));
-    v[0].x = (short)x;
-    v[0].y = (short)y;
-    v[0].z = 0;
-    v[1].x = (short)(x + w);
-    v[1].y = (short)(y + h);
-    v[1].z = 0;
-
-    sceGuDrawArray(GU_SPRITES,
-        GU_VERTEX_16BIT | GU_TRANSFORM_2D,
-        2, 0, v);
-}
-
-static void text(int x, int y, const char *str,
-                 unsigned int color) {
-    /* Texto temporariamente representado por blocos.
-       Na próxima etapa, podemos integrar uma fonte bitmap. */
-    int cx = x;
-    while (*str) {
-        if (*str != ' ')
-            rect(cx, y, 5, 8, color);
-        cx += 8;
-        str++;
-    }
-}
-
-static void beginFrame(void) {
-    sceGuStart(GU_DIRECT, list);
-    sceGuClearColor(rgba(12, 12, 12, 255));
-    sceGuClear(GU_COLOR_BUFFER_BIT);
-}
-
-static void endFrame(void) {
-    sceGuFinish();
-    sceGuSync(0, 0);
+static void waitFrame(void) {
     sceDisplayWaitVblankStart();
-    sceGuSwapBuffers();
 }
 
-static void drawPlayer(void) {
-    unsigned int white = rgba(255, 255, 255, 255);
+static void drawMenu(void) {
+    pspDebugScreenClear();
 
-    rect(playerX, playerY, 12, 18, white);
-    rect(playerX + 2, playerY + 4, 3, 3,
-         rgba(12, 12, 12, 255));
-    rect(playerX + 7, playerY + 4, 3, 3,
-         rgba(12, 12, 12, 255));
-}
+    pspDebugScreenSetTextColor(0xFFFFFFFF);
+    pspDebugScreenSetXY(15, 3);
+    pspDebugScreenPrintf("R A N D O M");
 
-static void drawTitle(void) {
-    text(188, 65, "RANDOM", rgba(255, 255, 255, 255));
+    pspDebugScreenSetTextColor(0xFFAAAAAA);
+    pspDebugScreenSetXY(10, 5);
+    pspDebugScreenPrintf("BETA 0.1");
 
     const char *items[] = {
         "NOVO JOGO",
@@ -111,149 +52,180 @@ static void drawTitle(void) {
     };
 
     for (int i = 0; i < 3; i++) {
-        unsigned int c = (i == selected)
-            ? rgba(255, 255, 255, 255)
-            : rgba(100, 100, 100, 255);
+        pspDebugScreenSetXY(12, 10 + i * 2);
 
-        if (i == selected)
-            rect(145, 111 + i * 28, 5, 10, c);
-
-        text(160, 112 + i * 28, items[i], c);
+        if (i == selected) {
+            pspDebugScreenSetTextColor(0xFFFFFFFF);
+            pspDebugScreenPrintf("> %s", items[i]);
+        } else {
+            pspDebugScreenSetTextColor(0xFF888888);
+            pspDebugScreenPrintf("  %s", items[i]);
+        }
     }
 
-    text(145, 235, "X: CONFIRMAR",
-         rgba(130, 130, 130, 255));
+    pspDebugScreenSetTextColor(0xFFAAAAAA);
+    pspDebugScreenSetXY(5, 25);
+    pspDebugScreenPrintf("CIMA/BAIXO: NAVEGAR");
+    pspDebugScreenSetXY(5, 26);
+    pspDebugScreenPrintf("X: CONFIRMAR");
 }
 
 static void drawIntro(void) {
-    rect(0, 230, W, 42, rgba(255, 255, 255, 255));
-    drawPlayer();
+    pspDebugScreenClear();
 
-    text(20, 20, "DIA 0",
-         rgba(255, 255, 255, 255));
+    pspDebugScreenSetTextColor(0xFFFFFFFF);
+    pspDebugScreenSetXY(2, 3);
+    pspDebugScreenPrintf("RANDOM");
 
-    if (introTimer < 180) {
-        text(130, 80, "ONDE ESTOU?",
-             rgba(255, 255, 255, 255));
+    pspDebugScreenSetXY(2, 8);
+
+    if (introStep == 0) {
+        pspDebugScreenPrintf("...");
+    } else if (introStep == 1) {
+        pspDebugScreenPrintf("Onde estou?");
     } else {
-        text(100, 80, "EXPLORE O CAMINHO",
-             rgba(255, 255, 255, 255));
+        pspDebugScreenPrintf("Preciso continuar.");
     }
+
+    pspDebugScreenSetTextColor(0xFFAAAAAA);
+    pspDebugScreenSetXY(2, 25);
+    pspDebugScreenPrintf("X: CONTINUAR");
 }
 
-static void updateMenu(SceCtrlData pad) {
-    if ((pad.Buttons & PSP_CTRL_DOWN) &&
-        !(pad.Buttons & PSP_CTRL_DOWN)) {
-        selected = (selected + 1) % 3;
-    }
+static void drawGame(void) {
+    pspDebugScreenClear();
 
-    if (pad.Buttons & PSP_CTRL_CROSS) {
-        if (selected == 0) {
-            screen = 1;
-            introTimer = 0;
-        } else if (selected == 1) {
-            screen = 2;
-        } else {
-            screen = 3;
-        }
-    }
+    pspDebugScreenSetTextColor(0xFFFFFFFF);
+    pspDebugScreenSetXY(2, 2);
+    pspDebugScreenPrintf("RANDOM | EXPLORACAO");
+
+    pspDebugScreenSetXY(2, 6);
+    pspDebugScreenPrintf("________________________________");
+
+    pspDebugScreenSetXY(playerX, playerY);
+    pspDebugScreenPrintf("[]");
+
+    pspDebugScreenSetXY(2, 20);
+    pspDebugScreenPrintf("________________________________");
+
+    pspDebugScreenSetTextColor(0xFFAAAAAA);
+    pspDebugScreenSetXY(2, 25);
+    pspDebugScreenPrintf("ANALOG/D-PAD: MOVER");
+    pspDebugScreenSetXY(2, 26);
+    pspDebugScreenPrintf("X: SALTAR | START: MENU");
 }
 
 static void updateGame(SceCtrlData pad) {
-    if (pad.Buttons & PSP_CTRL_LEFT)
-        playerX -= 2.0f;
-
-    if (pad.Buttons & PSP_CTRL_RIGHT)
-        playerX += 2.0f;
-
-    if ((pad.Buttons & PSP_CTRL_CROSS) && onGround) {
-        velocityY = -6.5f;
-        onGround = 0;
+    if (pad.Buttons & PSP_CTRL_LEFT) {
+        if (playerX > 2) playerX--;
     }
 
-    velocityY += 0.25f;
-    playerY += velocityY;
-
-    if (playerY > 212) {
-        playerY = 212;
-        velocityY = 0;
-        onGround = 1;
+    if (pad.Buttons & PSP_CTRL_RIGHT) {
+        if (playerX < 28) playerX++;
     }
 
-    if (playerX < 0) playerX = 0;
-    if (playerX > W - 12) playerX = W - 12;
+    if (pressed(pad.Buttons, PSP_CTRL_CROSS) && !jumping) {
+        jumping = 1;
+        jumpVelocity = -4;
+    }
+
+    if (jumping) {
+        playerY += jumpVelocity;
+        jumpVelocity++;
+
+        if (playerY >= 18) {
+            playerY = 18;
+            jumping = 0;
+            jumpVelocity = 0;
+        }
+
+        if (playerY < 6) {
+            playerY = 6;
+            jumpVelocity = 1;
+        }
+    }
+
+    if (pressed(pad.Buttons, PSP_CTRL_START)) {
+        screen = MENU;
+    }
 }
 
 int main(void) {
+    SceCtrlData pad;
+
+    pspDebugScreenInit();
     sceCtrlSetSamplingCycle(0);
     sceCtrlSetSamplingMode(PSP_CTRL_MODE_ANALOG);
 
-    sceGuInit();
-
-    sceGuStart(GU_DIRECT, list);
-    sceGuDrawBuffer(GU_PSM_8888,
-                    (void*)0, BUF_WIDTH);
-    sceGuDispBuffer(W, H,
-                    (void*)0x88000, BUF_WIDTH);
-    sceGuOffset(2048 - W / 2, 2048 - H / 2);
-    sceGuViewport(2048, 2048, W, H);
-    sceGuDepthRange(65535, 0);
-    sceGuDisable(GU_DEPTH_TEST);
-    sceGuDisable(GU_CULL_FACE);
-    sceGuFinish();
-    sceGuSync(0, 0);
-    sceDisplayWaitVblankStart();
-    sceGuDisplay(GU_TRUE);
-
     while (1) {
-        SceCtrlData pad;
         sceCtrlReadBufferPositive(&pad, 1);
 
-        if (pad.Buttons & PSP_CTRL_START) {
-            if (screen == 1)
-                screen = 2;
-        }
-
-        beginFrame();
-
-        if (screen == 0) {
-            if (pad.Buttons & PSP_CTRL_UP)
+        switch (screen) {
+        case MENU:
+            if (pressed(pad.Buttons, PSP_CTRL_UP)) {
                 selected = (selected + 2) % 3;
-            if (pad.Buttons & PSP_CTRL_DOWN)
-                selected = (selected + 1) % 3;
-
-            if (pad.Buttons & PSP_CTRL_CROSS) {
-                screen = (selected == 2) ? 3 : 1;
             }
 
-            drawTitle();
-        } else if (screen == 1) {
+            if (pressed(pad.Buttons, PSP_CTRL_DOWN)) {
+                selected = (selected + 1) % 3;
+            }
+
+            if (pressed(pad.Buttons, PSP_CTRL_CROSS)) {
+                if (selected == 0) {
+                    screen = INTRO;
+                    introStep = 0;
+                    introFrames = 0;
+                    playerX = 8;
+                    playerY = 18;
+                } else if (selected == 1) {
+                    screen = GAME;
+                } else {
+                    screen = OPTIONS;
+                }
+            }
+
+            drawMenu();
+            break;
+
+        case INTRO:
             drawIntro();
-            introTimer++;
 
-            if (introTimer > 240)
-                screen = 2;
-        } else if (screen == 2) {
+            if (pressed(pad.Buttons, PSP_CTRL_CROSS)) {
+                introStep++;
+
+                if (introStep >= 3) {
+                    screen = GAME;
+                }
+            }
+
+            introFrames++;
+            break;
+
+        case GAME:
             updateGame(pad);
-            rect(0, 230, W, 42,
-                 rgba(255, 255, 255, 255));
-            drawPlayer();
-            text(10, 10, "RANDOM",
-                 rgba(255, 255, 255, 255));
-        } else {
-            text(160, 80, "OPCOES",
-                 rgba(255, 255, 255, 255));
-            text(100, 120, "TRIANGULO: VOLTAR",
-                 rgba(200, 200, 200, 255));
+            drawGame();
+            break;
 
-            if (pad.Buttons & PSP_CTRL_TRIANGLE)
-                screen = 0;
+        case OPTIONS:
+            pspDebugScreenClear();
+            pspDebugScreenSetTextColor(0xFFFFFFFF);
+            pspDebugScreenSetXY(5, 5);
+            pspDebugScreenPrintf("OPCOES");
+            pspDebugScreenSetXY(5, 8);
+            pspDebugScreenPrintf("Beta 0.1");
+            pspDebugScreenSetXY(5, 12);
+            pspDebugScreenPrintf("TRIANGULO: VOLTAR");
+
+            if (pressed(pad.Buttons, PSP_CTRL_TRIANGLE)) {
+                screen = MENU;
+            }
+            break;
         }
 
-        endFrame();
+        previousButtons = pad.Buttons;
+        waitFrame();
     }
 
-    sceGuTerm();
     sceKernelExitGame();
     return 0;
 }
