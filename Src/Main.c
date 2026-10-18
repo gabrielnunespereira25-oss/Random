@@ -2,185 +2,140 @@
 #include <pspkernel.h>
 #include <pspdebug.h>
 #include <pspctrl.h>
-#include <pspdisplay.h>
 #include <stdio.h>
 #include <string.h>
 
 PSP_MODULE_INFO("RANDOM", 0, 1, 0);
 PSP_MAIN_THREAD_ATTR(THREAD_ATTR_USER);
 
-enum {
+typedef enum {
     MENU,
     INTRO,
     GAME,
     OPTIONS
-};
+} Screen;
 
-static int screen = MENU;
+static Screen screen = MENU;
 static int selected = 0;
+static int playerX = 10;
+static int playerY = 20;
+static int velocityY = 0;
+static int grounded = 1;
 static int introStep = 0;
-static int introFrames = 0;
-static int playerX = 8;
-static int playerY = 10;
-static int jumping = 0;
-static int jumpVelocity = 0;
-static int previousButtons = 0;
 
-static int pressed(int buttons, int key) {
+static unsigned int previousButtons = 0;
+
+static int pressed(unsigned int buttons, unsigned int key)
+{
     return (buttons & key) && !(previousButtons & key);
 }
 
-static void waitFrame(void) {
-    sceDisplayWaitVblankStart();
-}
-
-static void drawMenu(void) {
+static void drawMenu(void)
+{
     pspDebugScreenClear();
 
-    pspDebugScreenSetTextColor(0xFFFFFFFF);
     pspDebugScreenSetXY(15, 3);
-    pspDebugScreenPrintf("R A N D O M");
-
-    pspDebugScreenSetTextColor(0xFFAAAAAA);
-    pspDebugScreenSetXY(10, 5);
-    pspDebugScreenPrintf("BETA 0.1");
-
-    const char *items[] = {
-        "NOVO JOGO",
-        "CONTINUAR",
-        "OPCOES"
-    };
-
-    for (int i = 0; i < 3; i++) {
-        pspDebugScreenSetXY(12, 10 + i * 2);
-
-        if (i == selected) {
-            pspDebugScreenSetTextColor(0xFFFFFFFF);
-            pspDebugScreenPrintf("> %s", items[i]);
-        } else {
-            pspDebugScreenSetTextColor(0xFF888888);
-            pspDebugScreenPrintf("  %s", items[i]);
-        }
-    }
-
-    pspDebugScreenSetTextColor(0xFFAAAAAA);
-    pspDebugScreenSetXY(5, 25);
-    pspDebugScreenPrintf("CIMA/BAIXO: NAVEGAR");
-    pspDebugScreenSetXY(5, 26);
-    pspDebugScreenPrintf("X: CONFIRMAR");
-}
-
-static void drawIntro(void) {
-    pspDebugScreenClear();
-
-    pspDebugScreenSetTextColor(0xFFFFFFFF);
-    pspDebugScreenSetXY(2, 3);
     pspDebugScreenPrintf("RANDOM");
 
-    pspDebugScreenSetXY(2, 8);
+    pspDebugScreenSetXY(9, 5);
+    pspDebugScreenPrintf("BETA 0.1 - PSP");
 
-    if (introStep == 0) {
-        pspDebugScreenPrintf("...");
-    } else if (introStep == 1) {
-        pspDebugScreenPrintf("Onde estou?");
-    } else {
-        pspDebugScreenPrintf("Preciso continuar.");
-    }
+    pspDebugScreenSetXY(10, 9);
+    pspDebugScreenPrintf("%s NOVO JOGO",
+        selected == 0 ? ">" : " ");
 
-    pspDebugScreenSetTextColor(0xFFAAAAAA);
-    pspDebugScreenSetXY(2, 25);
-    pspDebugScreenPrintf("X: CONTINUAR");
+    pspDebugScreenSetXY(10, 10);
+    pspDebugScreenPrintf("%s OPCOES",
+        selected == 1 ? ">" : " ");
+
+    pspDebugScreenSetXY(10, 11);
+    pspDebugScreenPrintf("%s SAIR",
+        selected == 2 ? ">" : " ");
+
+    pspDebugScreenSetXY(4, 26);
+    pspDebugScreenPrintf("D-PAD: mover   X: confirmar");
 }
 
-static void drawGame(void) {
+static void drawIntro(void)
+{
     pspDebugScreenClear();
 
-    pspDebugScreenSetTextColor(0xFFFFFFFF);
-    pspDebugScreenSetXY(2, 2);
-    pspDebugScreenPrintf("RANDOM | EXPLORACAO");
+    pspDebugScreenSetXY(2, 5);
+    pspDebugScreenPrintf("RANDOM");
 
-    pspDebugScreenSetXY(2, 6);
-    pspDebugScreenPrintf("________________________________");
+    pspDebugScreenSetXY(2, 10);
+
+    if (introStep == 0)
+        pspDebugScreenPrintf("Onde estou?");
+    else if (introStep == 1)
+        pspDebugScreenPrintf("Tudo esta em silencio...");
+    else
+        pspDebugScreenPrintf("Preciso continuar.");
+
+    pspDebugScreenSetXY(2, 26);
+    pspDebugScreenPrintf("Pressione X para continuar");
+}
+
+static void drawGame(void)
+{
+    pspDebugScreenClear();
+
+    pspDebugScreenSetXY(2, 2);
+    pspDebugScreenPrintf("RANDOM - BETA");
 
     pspDebugScreenSetXY(playerX, playerY);
-    pspDebugScreenPrintf("[]");
+    pspDebugScreenPrintf("o");
 
-    pspDebugScreenSetXY(2, 20);
-    pspDebugScreenPrintf("________________________________");
+    pspDebugScreenSetXY(0, 22);
+    pspDebugScreenPrintf(
+        "================================================"
+    );
 
-    pspDebugScreenSetTextColor(0xFFAAAAAA);
-    pspDebugScreenSetXY(2, 25);
-    pspDebugScreenPrintf("ANALOG/D-PAD: MOVER");
     pspDebugScreenSetXY(2, 26);
-    pspDebugScreenPrintf("X: SALTAR | START: MENU");
+    pspDebugScreenPrintf("D-PAD: mover | X: pular | START: menu");
 }
 
-static void updateGame(SceCtrlData pad) {
-    if (pad.Buttons & PSP_CTRL_LEFT) {
-        if (playerX > 2) playerX--;
-    }
+static void drawOptions(void)
+{
+    pspDebugScreenClear();
 
-    if (pad.Buttons & PSP_CTRL_RIGHT) {
-        if (playerX < 28) playerX++;
-    }
+    pspDebugScreenSetXY(5, 5);
+    pspDebugScreenPrintf("OPCOES");
 
-    if (pressed(pad.Buttons, PSP_CTRL_CROSS) && !jumping) {
-        jumping = 1;
-        jumpVelocity = -4;
-    }
+    pspDebugScreenSetXY(2, 9);
+    pspDebugScreenPrintf("RANDOM - Beta 0.1");
 
-    if (jumping) {
-        playerY += jumpVelocity;
-        jumpVelocity++;
-
-        if (playerY >= 18) {
-            playerY = 18;
-            jumping = 0;
-            jumpVelocity = 0;
-        }
-
-        if (playerY < 6) {
-            playerY = 6;
-            jumpVelocity = 1;
-        }
-    }
-
-    if (pressed(pad.Buttons, PSP_CTRL_START)) {
-        screen = MENU;
-    }
+    pspDebugScreenSetXY(2, 26);
+    pspDebugScreenPrintf("TRIANGULO: voltar");
 }
 
-int main(void) {
+int main(void)
+{
     SceCtrlData pad;
 
     pspDebugScreenInit();
     sceCtrlSetSamplingCycle(0);
-    sceCtrlSetSamplingMode(PSP_CTRL_MODE_ANALOG);
+    sceCtrlSetSamplingMode(PSP_CTRL_MODE_DIGITAL);
 
     while (1) {
         sceCtrlReadBufferPositive(&pad, 1);
 
         switch (screen) {
         case MENU:
-            if (pressed(pad.Buttons, PSP_CTRL_UP)) {
+            if (pressed(pad.Buttons, PSP_CTRL_UP))
                 selected = (selected + 2) % 3;
-            }
 
-            if (pressed(pad.Buttons, PSP_CTRL_DOWN)) {
+            if (pressed(pad.Buttons, PSP_CTRL_DOWN))
                 selected = (selected + 1) % 3;
-            }
 
             if (pressed(pad.Buttons, PSP_CTRL_CROSS)) {
                 if (selected == 0) {
-                    screen = INTRO;
                     introStep = 0;
-                    introFrames = 0;
-                    playerX = 8;
-                    playerY = 18;
+                    screen = INTRO;
                 } else if (selected == 1) {
-                    screen = GAME;
-                } else {
                     screen = OPTIONS;
+                } else {
+                    sceKernelExitGame();
                 }
             }
 
@@ -188,44 +143,67 @@ int main(void) {
             break;
 
         case INTRO:
-            drawIntro();
-
             if (pressed(pad.Buttons, PSP_CTRL_CROSS)) {
                 introStep++;
 
                 if (introStep >= 3) {
+                    playerX = 10;
+                    playerY = 20;
+                    velocityY = 0;
+                    grounded = 1;
                     screen = GAME;
                 }
             }
 
-            introFrames++;
+            drawIntro();
             break;
 
         case GAME:
-            updateGame(pad);
+            if (pad.Buttons & PSP_CTRL_LEFT)
+                playerX--;
+
+            if (pad.Buttons & PSP_CTRL_RIGHT)
+                playerX++;
+
+            if (playerX < 0)
+                playerX = 0;
+
+            if (playerX > 47)
+                playerX = 47;
+
+            if (pressed(pad.Buttons, PSP_CTRL_CROSS) && grounded) {
+                velocityY = -3;
+                grounded = 0;
+            }
+
+            if (!grounded) {
+                playerY += velocityY;
+                velocityY++;
+
+                if (playerY >= 20) {
+                    playerY = 20;
+                    velocityY = 0;
+                    grounded = 1;
+                }
+            }
+
+            if (pressed(pad.Buttons, PSP_CTRL_START))
+                screen = MENU;
+
             drawGame();
             break;
 
         case OPTIONS:
-            pspDebugScreenClear();
-            pspDebugScreenSetTextColor(0xFFFFFFFF);
-            pspDebugScreenSetXY(5, 5);
-            pspDebugScreenPrintf("OPCOES");
-            pspDebugScreenSetXY(5, 8);
-            pspDebugScreenPrintf("Beta 0.1");
-            pspDebugScreenSetXY(5, 12);
-            pspDebugScreenPrintf("TRIANGULO: VOLTAR");
-
-            if (pressed(pad.Buttons, PSP_CTRL_TRIANGLE)) {
+            if (pressed(pad.Buttons, PSP_CTRL_TRIANGLE))
                 screen = MENU;
-            }
+
+            drawOptions();
             break;
         }
 
         previousButtons = pad.Buttons;
-        waitFrame();
+        sceDisplayWaitVblankStart();
     }
 
-    sceKernelExitGame();
     return 0;
 }
