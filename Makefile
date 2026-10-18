@@ -17,10 +17,5 @@ LIBS = -lpspdebug -lpspdisplay -lpspctrl -lpspkernel
 PSPSDK := $(shell psp-config --pspsdk-path)
 include $(PSPSDK)/lib/build.mak
 
-.PHONY: check-source
-
-check-source:
-	@echo "Arquivos na raiz:"
-	@ls -la
-	@echo "Arquivos em src:"
-	@ls -la src
+src/main.o: src/main.c
+	$(CC) $(CFLAGS) -c $< -o $@
