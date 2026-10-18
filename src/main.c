@@ -3,7 +3,6 @@
 #include <pspdisplay.h>
 #include <pspgu.h>
 #include <pspctrl.h>
-#include <pspdebug.h>
 #include <math.h>
 #include <string.h>
 
@@ -13,16 +12,16 @@ PSP_MAIN_THREAD_ATTR(THREAD_ATTR_USER);
 #define SW 480
 #define SH 272
 #define BUF_WIDTH 512
-#define MAX_SHOTS 6
-#define MAX_OBJECTS 12
-#define WORLD_W 1500.0f
-#define PLAYER_W 20.0f
-#define PLAYER_H 34.0f
+#define WORLD_W 2400.0f
+#define PW 18.0f
+#define PH 30.0f
+#define ENEMY_COUNT 12
+#define SHOT_COUNT 6
 
 #define WHITE 0xFFFFFFFF
-#define GRAY  0xFF888888
-#define DARK  0xFF333333
 #define BLACK 0xFF000000
+/* Cores no formato ABGR usado pela GU do PSP. */
+#define BLUE  0xFFFF0000
 
 typedef struct {
     unsigned int color;
@@ -35,70 +34,57 @@ typedef struct {
 
 typedef struct {
     float x, y, vx, vy;
-    int active;
-    int target;
+    int active, target;
 } Shot;
 
 typedef struct {
-    float x, y, w, h;
-    int active;
-    int room;
-} MagicObject;
+    float x, y, baseY;
+    float w, h, phase;
+    int active, hp;
+} Enemy;
 
 static unsigned int __attribute__((aligned(16)))
 displayList[262144];
 
-static int gameState = 0;
-static int frameIndex = 0;
-static int currentRoom = 0;
-
-static float playerX = 35.0f;
-static float playerY = 202.0f;
-static float playerVY = 0.0f;
-static float cameraX = 0.0f;
-
+static int state = 0;
+static int magicUnlocked = 0;
 static int grounded = 0;
 static int jumps = 0;
-static int magicUnlocked = 0;
-static int shotCooldown = 0;
+static int cooldown = 0;
+static int room = 0;
+static int frame = 0;
 
-static Shot shots[MAX_SHOTS];
+static float px = 35.0f;
+static float py = 190.0f;
+static float pvy = 0.0f;
+static float cameraX = 0.0f;
 
-static MagicObject objects[MAX_OBJECTS] = {
-    {145,177,12,12,1,0},
-    {235,132,12,12,1,0},
-    {410,175,12,12,1,0},
+static unsigned int previousButtons = 0;
 
-    {555,157,12,12,1,1},
-    {655,112,12,12,1,1},
-    {765,168,12,12,1,1},
-    {850,135,12,12,1,1},
+static Shot shots[SHOT_COUNT];
 
-    {1035,164,12,12,1,2},
-    {1145,110,12,12,1,2},
-    {1255,150,12,12,1,2},
-    {1350,112,12,12,1,2},
-    {1430,172,12,12,1,2}
+static Enemy enemies[ENEMY_COUNT] = {
+    {160,170,170,18,18,0.0f,1,1},
+    {300,130,130,18,18,1.2f,1,1},
+    {430,175,175,18,18,2.1f,1,1},
+    {610,150,150,18,18,0.7f,1,1},
+    {760,110,110,18,18,1.8f,1,1},
+    {900,170,170,18,18,2.8f,1,1},
+    {1080,140,140,18,18,0.3f,1,1},
+    {1230,100,100,18,18,1.4f,1,1},
+    {1400,160,160,18,18,2.5f,1,1},
+    {1630,135,135,18,18,0.9f,1,1},
+    {1870,100,100,18,18,1.7f,1,1},
+    {2200,145,145,18,18,2.7f,1,1}
 };
 
 static void initGraphics(void)
 {
     sceGuInit();
-
     sceGuStart(GU_DIRECT, displayList);
 
-    sceGuDrawBuffer(
-        GU_PSM_8888,
-        (void *)0,
-        BUF_WIDTH
-    );
-
-    sceGuDispBuffer(
-        SW, SH,
-        (void *)0x88000,
-        BUF_WIDTH
-    );
-
+    sceGuDrawBuffer(GU_PSM_8888, (void *)0, BUF_WIDTH);
+    sceGuDispBuffer(SW, SH, (void *)0x88000, BUF_WIDTH);
     sceGuOffset(2048 - SW / 2, 2048 - SH / 2);
     sceGuViewport(2048, 2048, SW, SH);
     sceGuScissor(0, 0, SW, SH);
@@ -107,13 +93,13 @@ static void initGraphics(void)
     sceGuDisable(GU_DEPTH_TEST);
     sceGuDisable(GU_CULL_FACE);
     sceGuDisable(GU_TEXTURE_2D);
+    sceGuShadeModel(GU_FLAT);
 
     sceGuClearColor(BLACK);
     sceGuClear(GU_COLOR_BUFFER_BIT);
 
     sceGuFinish();
     sceGuSync(0, 0);
-
     sceDisplayWaitVblankStart();
     sceGuDisplay(GU_TRUE);
 }
@@ -121,13 +107,6 @@ static void initGraphics(void)
 static void beginFrame(void)
 {
     sceGuStart(GU_DIRECT, displayList);
-
-    sceGuDrawBuffer(
-        GU_PSM_8888,
-        (void *)(frameIndex ? 0x88000 : 0),
-        BUF_WIDTH
-    );
-
     sceGuClearColor(BLACK);
     sceGuClear(GU_COLOR_BUFFER_BIT);
 }
@@ -138,18 +117,12 @@ static void endFrame(void)
     sceGuSync(0, 0);
     sceDisplayWaitVblankStart();
     sceGuSwapBuffers();
-
-    frameIndex ^= 1;
 }
 
-static void rectangle(
-    float x, float y, float w, float h,
-    unsigned int color
-)
+static void rect(float x, float y, float w, float h,
+                 unsigned int color)
 {
-    Vertex *v = (Vertex *)sceGuGetMemory(
-        2 * sizeof(Vertex)
-    );
+    Vertex *v = (Vertex *)sceGuGetMemory(2 * sizeof(Vertex));
 
     v[0].color = color;
     v[0].x = x;
@@ -163,384 +136,301 @@ static void rectangle(
 
     sceGuDrawArray(
         GU_SPRITES,
-        GU_COLOR_8888 |
-        GU_VERTEX_32BITF |
-        GU_TRANSFORM_2D,
+        GU_COLOR_8888 | GU_VERTEX_32BITF | GU_TRANSFORM_2D,
         2, 0, v
     );
 }
 
-static void worldRect(
-    float x, float y, float w, float h,
-    unsigned int color
-)
+static void wr(float x, float y, float w, float h,
+               unsigned int color)
 {
-    rectangle(
-        x - cameraX,
-        y,
-        w, h,
-        color
-    );
+    rect(x - cameraX, y, w, h, color);
 }
 
-/* Fonte bitmap compacta */
-static const unsigned char font5x7[][5] = {
-    {0,0,0,0,0},
-    {0x3E,0x51,0x49,0x45,0x3E}, /* 0 */
-    {0,0x42,0x7F,0x40,0},       /* 1 */
-    {0x42,0x61,0x51,0x49,0x46}, /* 2 */
-    {0x21,0x41,0x45,0x4B,0x31}, /* 3 */
-    {0x18,0x14,0x12,0x7F,0x10}, /* 4 */
-    {0x27,0x45,0x45,0x45,0x39}, /* 5 */
-    {0x3C,0x4A,0x49,0x49,0x30}, /* 6 */
-    {0x01,0x71,0x09,0x05,0x03}, /* 7 */
-    {0x36,0x49,0x49,0x49,0x36}, /* 8 */
-    {0x06,0x49,0x49,0x29,0x1E}, /* 9 */
-    {0x7E,0x11,0x11,0x11,0x7E}, /* A */
-    {0x7F,0x49,0x49,0x49,0x36}, /* B */
-    {0x3E,0x41,0x41,0x41,0x22}, /* C */
-    {0x7F,0x41,0x41,0x22,0x1C}, /* D */
-    {0x7F,0x49,0x49,0x49,0x41}, /* E */
-    {0x7F,0x09,0x09,0x09,0x01}, /* F */
-    {0x3E,0x41,0x49,0x49,0x7A}, /* G */
-    {0x7F,0x08,0x08,0x08,0x7F}, /* H */
-    {0x41,0x41,0x7F,0x41,0x41}, /* I */
-    {0x20,0x40,0x41,0x3F,0x01}, /* J */
-    {0x7F,0x08,0x14,0x22,0x41}, /* K */
-    {0x7F,0x40,0x40,0x40,0x40}, /* L */
-    {0x7F,0x02,0x0C,0x02,0x7F}, /* M */
-    {0x7F,0x04,0x08,0x10,0x7F}, /* N */
-    {0x3E,0x41,0x41,0x41,0x3E}, /* O */
-    {0x7F,0x09,0x09,0x09,0x06}, /* P */
-    {0x3E,0x41,0x51,0x21,0x5E}, /* Q */
-    {0x7F,0x09,0x19,0x29,0x46}, /* R */
-    {0x46,0x49,0x49,0x49,0x31}, /* S */
-    {0x01,0x01,0x7F,0x01,0x01}, /* T */
-    {0x3F,0x40,0x40,0x40,0x3F}, /* U */
-    {0x1F,0x20,0x40,0x20,0x1F}, /* V */
-    {0x3F,0x40,0x38,0x40,0x3F}, /* W */
-    {0x63,0x14,0x08,0x14,0x63}, /* X */
-    {0x07,0x08,0x70,0x08,0x07}, /* Y */
-    {0x61,0x51,0x49,0x45,0x43}  /* Z */
-};
-
-static int charIndex(char c)
+/* Letras simples desenhadas sem texturas. */
+static void letter(int x, int y, char c, unsigned int color)
 {
-    if (c >= '0' && c <= '9')
-        return 1 + c - '0';
+    static const unsigned char glyph[26][5] = {
+        {126,17,17,17,126},{127,73,73,73,54},
+        {62,65,65,65,34},{127,65,65,34,28},
+        {127,73,73,73,65},{127,9,9,9,1},
+        {62,65,73,73,122},{127,8,8,8,127},
+        {0,65,127,65,0},{32,64,65,63,1},
+        {127,8,20,34,65},{127,64,64,64,64},
+        {127,2,12,2,127},{127,4,8,16,127},
+        {62,65,65,65,62},{127,9,9,9,6},
+        {62,65,81,33,94},{127,9,25,41,70},
+        {70,73,73,73,49},{1,1,127,1,1},
+        {63,64,64,64,63},{31,32,64,32,31},
+        {63,64,56,64,63},{99,20,8,20,99},
+        {7,8,112,8,7},{97,81,73,69,67}
+    };
 
-    if (c >= 'A' && c <= 'Z')
-        return 11 + c - 'A';
+    if (c < 'A' || c > 'Z')
+        return;
 
-    return 0;
-}
+    const unsigned char *g = glyph[c - 'A'];
 
-static void drawText(
-    int x, int y,
-    const char *text,
-    unsigned int color
-)
-{
-    while (*text) {
-        char c = *text++;
-
-        if (c == ' ') {
-            x += 8;
-            continue;
+    for (int col = 0; col < 5; col++) {
+        for (int row = 0; row < 7; row++) {
+            if (g[col] & (1 << row))
+                rect(x + col * 2, y + row * 2, 2, 2, color);
         }
-
-        int index = charIndex(c);
-
-        for (int col = 0; col < 5; col++) {
-            unsigned char bits = font5x7[index][col];
-
-            for (int row = 0; row < 7; row++) {
-                if (bits & (1 << row)) {
-                    rectangle(
-                        x + col * 2,
-                        y + row * 2,
-                        2, 2, color
-                    );
-                }
-            }
-        }
-
-        x += 12;
     }
 }
 
-static void drawPlatform(float x, float y, float w)
+static void text(int x, int y, const char *s,
+                 unsigned int color)
 {
-    worldRect(x, y, w, 5, WHITE);
-    worldRect(x, y + 5, w, 3, GRAY);
-
-    for (float i = 8; i < w; i += 24)
-        worldRect(x + i, y + 8, 2, 5, DARK);
-}
-
-static void drawCrystal(float x, float y)
-{
-    worldRect(x + 4, y, 5, 5, WHITE);
-    worldRect(x + 2, y + 5, 9, 5, GRAY);
-    worldRect(x, y + 10, 13, 5, WHITE);
-    worldRect(x + 3, y + 15, 7, 4, GRAY);
-}
-
-static void drawSpike(float x, float y, int size)
-{
-    worldRect(x, y, size, 3, WHITE);
-    worldRect(x + size / 4, y - 5, size / 2, 5, WHITE);
-    worldRect(x + size / 3, y - 9, size / 3, 4, WHITE);
-}
-
-static void drawCracks(float x, float y)
-{
-    worldRect(x, y, 15, 2, GRAY);
-    worldRect(x + 5, y + 2, 2, 7, GRAY);
-    worldRect(x + 5, y + 9, 10, 2, GRAY);
-    worldRect(x + 12, y + 11, 2, 6, GRAY);
-}
-
-static void drawRoomBackground(int room)
-{
-    for (int i = 0; i < 7; i++) {
-        float x = room * 500 + i * 70;
-
-        worldRect(x, 45 + (i % 3) * 12, 30, 3, DARK);
-        worldRect(x + 17, 48 + (i % 3) * 12, 3, 10, GRAY);
+    while (*s) {
+        if (*s == ' ') {
+            x += 12;
+        } else {
+            letter(x, y, *s, color);
+            x += 12;
+        }
+        s++;
     }
-
-    drawCrystal(room * 500 + 95, 205);
-    drawCrystal(room * 500 + 325, 193);
-
-    drawCracks(room * 500 + 180, 80);
-    drawCracks(room * 500 + 380, 100);
 }
 
-static void drawRoom0(void)
+static void platform(float x, float y, float w)
 {
-    drawRoomBackground(0);
+    wr(x, y, w, 4, WHITE);
+    wr(x + 3, y + 4, w - 6, 2, BLACK);
 
-    drawPlatform(0, 236, 95);
-    drawPlatform(110, 236, 70);
-    drawPlatform(195, 236, 90);
-    drawPlatform(300, 236, 200);
-
-    drawPlatform(70, 194, 42);
-    drawPlatform(142, 165, 48);
-    drawPlatform(225, 190, 45);
-    drawPlatform(340, 155, 50);
-    drawPlatform(420, 195, 45);
-
-    drawSpike(185, 236, 18);
-    drawSpike(287, 236, 14);
-
-    worldRect(0, 0, 120, 35, WHITE);
-    worldRect(0, 35, 95, 8, GRAY);
-    worldRect(135, 0, 85, 20, WHITE);
-    worldRect(150, 20, 50, 6, GRAY);
-    worldRect(260, 0, 95, 28, WHITE);
-    worldRect(290, 28, 65, 6, GRAY);
-    worldRect(390, 0, 110, 22, WHITE);
+    for (float i = 9; i < w - 5; i += 21) {
+        wr(x + i, y + 1, 2, 3, BLACK);
+    }
 }
 
-static void drawRoom1(void)
+static void stalactite(float x, float width, float length)
 {
-    drawRoomBackground(1);
-
-    drawPlatform(500, 236, 65);
-    drawPlatform(590, 220, 55);
-    drawPlatform(665, 236, 70);
-    drawPlatform(755, 207, 45);
-    drawPlatform(820, 236, 85);
-    drawPlatform(920, 220, 80);
-
-    drawPlatform(535, 180, 42);
-    drawPlatform(625, 145, 55);
-    drawPlatform(720, 170, 35);
-    drawPlatform(795, 130, 48);
-    drawPlatform(885, 165, 40);
-    drawPlatform(950, 180, 45);
-
-    drawSpike(570, 236, 20);
-    drawSpike(740, 236, 20);
-    drawSpike(905, 236, 16);
-
-    worldRect(510, 0, 75, 24, WHITE);
-    worldRect(530, 24, 35, 9, GRAY);
-    worldRect(620, 0, 100, 17, WHITE);
-    worldRect(650, 17, 35, 12, GRAY);
-    worldRect(770, 0, 90, 28, WHITE);
-    worldRect(790, 28, 30, 10, GRAY);
-    worldRect(900, 0, 100, 18, WHITE);
+    wr(x, 0, width, 5, WHITE);
+    wr(x + width * 0.25f, 5, width * 0.5f,
+       length * 0.55f, WHITE);
+    wr(x + width * 0.4f, length * 0.55f,
+       width * 0.2f, length * 0.45f, WHITE);
 }
 
-static void drawRoom2(void)
+static void crack(float x, float y)
 {
-    drawRoomBackground(2);
+    wr(x, y, 14, 2, WHITE);
+    wr(x + 5, y + 2, 2, 7, WHITE);
+    wr(x + 5, y + 9, 9, 2, WHITE);
+    wr(x + 12, y + 11, 2, 5, WHITE);
+}
 
-    drawPlatform(1000, 236, 80);
-    drawPlatform(1100, 215, 55);
-    drawPlatform(1170, 190, 45);
-    drawPlatform(1230, 236, 70);
-    drawPlatform(1320, 210, 65);
-    drawPlatform(1400, 236, 100);
+static void crystalDecoration(float x, float y)
+{
+    wr(x + 5, y, 5, 5, WHITE);
+    wr(x + 2, y + 5, 11, 6, WHITE);
+    wr(x, y + 11, 15, 5, WHITE);
+    wr(x + 4, y + 16, 7, 4, WHITE);
+    wr(x + 6, y + 5, 2, 7, BLACK);
+}
 
-    drawPlatform(1040, 170, 45);
-    drawPlatform(1130, 145, 40);
-    drawPlatform(1210, 115, 55);
-    drawPlatform(1300, 160, 45);
-    drawPlatform(1380, 130, 45);
+static void caveRoom(int r)
+{
+    float start = r * 800.0f;
 
-    drawSpike(1080, 236, 18);
-    drawSpike(1210, 236, 18);
-    drawSpike(1305, 236, 14);
+    /* Teto quebrado, sem linhas perfeitamente uniformes. */
+    stalactite(start + 15, 54, 30);
+    stalactite(start + 105, 35, 19);
+    stalactite(start + 210, 60, 43);
+    stalactite(start + 335, 42, 24);
+    stalactite(start + 460, 65, 36);
+    stalactite(start + 610, 45, 27);
+    stalactite(start + 730, 52, 33);
 
-    worldRect(1460, 70, 40, 166, WHITE);
-    worldRect(1460, 70, 40, 8, GRAY);
+    crack(start + 90, 76);
+    crack(start + 280, 104);
+    crack(start + 510, 70);
+    crack(start + 675, 95);
 
-    worldRect(1420, 165, 34, 5, WHITE);
-    worldRect(1420, 170, 5, 32, GRAY);
-    worldRect(1449, 170, 5, 32, GRAY);
+    crystalDecoration(start + 170, 204);
+    crystalDecoration(start + 560, 190);
 
-    worldRect(1430, 178, 18, 18, WHITE);
-    worldRect(1435, 183, 8, 8, BLACK);
+    /* Piso principal dividido por fendas e abismos. */
+    platform(start, 238, 120);
+    platform(start + 145, 238, 105);
+    platform(start + 275, 238, 165);
+    platform(start + 470, 238, 115);
+    platform(start + 620, 238, 180);
 
-    drawText(1380 - (int)cameraX, 95, "EXIT", WHITE);
+    /* Caminhos verticais e plataformas naturais. */
+    platform(start + 65, 197, 47);
+    platform(start + 150, 166, 43);
+    platform(start + 245, 192, 40);
+    platform(start + 330, 151, 52);
+    platform(start + 430, 185, 42);
+    platform(start + 535, 160, 46);
+    platform(start + 650, 129, 55);
+    platform(start + 740, 177, 40);
+
+    /* Espinhos monocromáticos. */
+    wr(start + 126, 232, 5, 6, WHITE);
+    wr(start + 132, 226, 5, 12, WHITE);
+    wr(start + 138, 232, 5, 6, WHITE);
+
+    wr(start + 442, 232, 5, 6, WHITE);
+    wr(start + 448, 226, 5, 12, WHITE);
+    wr(start + 454, 232, 5, 6, WHITE);
+
+    /* Passagem estreita na parte superior. */
+    wr(start + 390, 48, 50, 4, WHITE);
+    wr(start + 390, 52, 4, 24, WHITE);
+    wr(start + 436, 52, 4, 24, WHITE);
 }
 
 static void drawCave(void)
 {
-    drawRoom0();
-    drawRoom1();
-    drawRoom2();
+    caveRoom(0);
+    caveRoom(1);
+    caveRoom(2);
 
-    worldRect(490, 190, 20, 46, BLACK);
-    worldRect(990, 190, 20, 46, BLACK);
+    /* Aberturas entre as áreas. */
+    wr(790, 200, 20, 38, BLACK);
+    wr(1590, 200, 20, 38, BLACK);
+
+    /* Paredes laterais com aberturas inferiores. */
+    wr(0, 0, 5, 238, WHITE);
+    wr(2395, 0, 5, 238, WHITE);
 }
 
 static void drawPlayer(void)
 {
-    float x = playerX - cameraX;
-    float y = playerY;
+    float x = px - cameraX;
+    float y = py;
 
-    rectangle(x + 5, y, 10, 10, WHITE);
-    rectangle(x + 3, y + 10, 14, 13, GRAY);
+    rect(x + 4, y, 10, 9, WHITE);
+    rect(x + 2, y + 9, 14, 12, WHITE);
+    rect(x, y + 11, 3, 10, WHITE);
+    rect(x + 15, y + 11, 3, 10, WHITE);
+    rect(x + 3, y + 21, 5, 9, WHITE);
+    rect(x + 11, y + 21, 5, 9, WHITE);
 
-    rectangle(x, y + 12, 4, 12, WHITE);
-    rectangle(x + 16, y + 12, 4, 12, WHITE);
-
-    rectangle(x + 4, y + 23, 5, 11, WHITE);
-    rectangle(x + 12, y + 23, 5, 11, WHITE);
-
-    rectangle(x + 7, y + 4, 2, 2, BLACK);
-    rectangle(x + 12, y + 4, 2, 2, BLACK);
+    rect(x + 6, y + 3, 2, 2, BLACK);
+    rect(x + 11, y + 3, 2, 2, BLACK);
 }
 
-static void drawObjects(void)
+static void drawEnemies(void)
 {
-    for (int i = 0; i < MAX_OBJECTS; i++) {
-        MagicObject *o = &objects[i];
+    for (int i = 0; i < ENEMY_COUNT; i++) {
+        Enemy *e = &enemies[i];
 
-        if (!o->active)
+        if (!e->active)
             continue;
 
-        worldRect(o->x - 3, o->y - 3, o->w + 6, 2, GRAY);
-        worldRect(o->x - 3, o->y + o->h + 1, o->w + 6, 2, GRAY);
-        worldRect(o->x - 3, o->y - 3, 2, o->h + 6, GRAY);
-        worldRect(o->x + o->w + 1, o->y - 3, 2, o->h + 6, GRAY);
+        float x = e->x - cameraX;
+        float y = e->y;
 
-        worldRect(o->x, o->y, o->w, o->h, WHITE);
-        worldRect(o->x + 4, o->y + 4, 4, 4, BLACK);
+        /* Cristal flutuante preto e branco. */
+        rect(x + 7, y, 5, 4, WHITE);
+        rect(x + 3, y + 4, 13, 5, WHITE);
+        rect(x, y + 9, 18, 5, WHITE);
+        rect(x + 3, y + 14, 12, 4, WHITE);
+
+        rect(x + 6, y + 7, 3, 3, BLACK);
+        rect(x + 11, y + 7, 3, 3, BLACK);
+
+        /* Contorno e brilho alternados em pixels. */
+        rect(x + 1, y + 9, 2, 4, BLACK);
+        rect(x + 15, y + 9, 2, 4, BLACK);
     }
 }
 
-static int nearestObject(void)
+static int nearestEnemy(float x, float y)
 {
-    int nearest = -1;
-    float best = 999999.0f;
+    int result = -1;
+    float best = 9999999.0f;
 
-    float px = playerX + PLAYER_W / 2;
-    float py = playerY + PLAYER_H / 2;
-
-    for (int i = 0; i < MAX_OBJECTS; i++) {
-        if (!objects[i].active)
+    for (int i = 0; i < ENEMY_COUNT; i++) {
+        if (!enemies[i].active)
             continue;
 
-        float dx = objects[i].x + objects[i].w / 2 - px;
-        float dy = objects[i].y + objects[i].h / 2 - py;
+        float dx = enemies[i].x + enemies[i].w * 0.5f - x;
+        float dy = enemies[i].y + enemies[i].h * 0.5f - y;
         float d = dx * dx + dy * dy;
 
         if (d < best) {
             best = d;
-            nearest = i;
+            result = i;
         }
     }
 
-    return nearest;
+    return result;
 }
 
 static void fireMagic(void)
 {
-    int target = nearestObject();
+    int target = nearestEnemy(px + PW / 2, py + PH / 2);
 
     if (target < 0)
         return;
 
-    for (int i = 0; i < MAX_SHOTS; i++) {
-        if (!shots[i].active) {
-            shots[i].x = playerX + PLAYER_W / 2;
-            shots[i].y = playerY + PLAYER_H / 2;
-            shots[i].vx = 4.0f;
-            shots[i].vy = 0.0f;
-            shots[i].target = target;
-            shots[i].active = 1;
-            shotCooldown = 15;
-            return;
-        }
+    for (int i = 0; i < SHOT_COUNT; i++) {
+        if (shots[i].active)
+            continue;
+
+        shots[i].x = px + PW / 2;
+        shots[i].y = py + PH / 2;
+        shots[i].vx = 3.5f;
+        shots[i].vy = 0.0f;
+        shots[i].target = target;
+        shots[i].active = 1;
+
+        cooldown = 15;
+        return;
     }
 }
 
 static void updateShots(void)
 {
-    for (int i = 0; i < MAX_SHOTS; i++) {
+    for (int i = 0; i < SHOT_COUNT; i++) {
         Shot *s = &shots[i];
 
         if (!s->active)
             continue;
 
-        if (s->target < 0 ||
-            s->target >= MAX_OBJECTS ||
-            !objects[s->target].active) {
+        if (s->target < 0 || s->target >= ENEMY_COUNT ||
+            !enemies[s->target].active) {
+            s->target = nearestEnemy(s->x, s->y);
+
+            if (s->target < 0) {
+                s->active = 0;
+                continue;
+            }
+        }
+
+        Enemy *e = &enemies[s->target];
+
+        float dx = e->x + e->w / 2 - s->x;
+        float dy = e->y + e->h / 2 - s->y;
+        float d = sqrtf(dx * dx + dy * dy);
+
+        if (d < 12.0f) {
+            e->hp--;
+
+            if (e->hp <= 0)
+                e->active = 0;
+
             s->active = 0;
             continue;
         }
 
-        MagicObject *o = &objects[s->target];
+        if (d > 0.01f) {
+            float vx = dx / d * 4.8f;
+            float vy = dy / d * 4.8f;
 
-        float dx = o->x + o->w / 2 - s->x;
-        float dy = o->y + o->h / 2 - s->y;
-        float distance = sqrtf(dx * dx + dy * dy);
-
-        if (distance < 9.0f) {
-            o->active = 0;
-            s->active = 0;
-            continue;
-        }
-
-        if (distance > 0.01f) {
-            float desiredVX = dx / distance * 5.0f;
-            float desiredVY = dy / distance * 5.0f;
-
-            s->vx += (desiredVX - s->vx) * 0.22f;
-            s->vy += (desiredVY - s->vy) * 0.22f;
+            s->vx += (vx - s->vx) * 0.18f;
+            s->vy += (vy - s->vy) * 0.18f;
         }
 
         s->x += s->vx;
         s->y += s->vy;
 
         if (s->x < 0 || s->x > WORLD_W ||
-            s->y < 0 || s->y > SH) {
+            s->y < -10 || s->y > SH + 20) {
             s->active = 0;
         }
     }
@@ -548,196 +438,214 @@ static void updateShots(void)
 
 static void drawShots(void)
 {
-    for (int i = 0; i < MAX_SHOTS; i++) {
-        if (!shots[i].active)
+    for (int i = 0; i < SHOT_COUNT; i++) {
+        Shot *s = &shots[i];
+
+        if (!s->active)
             continue;
 
-        float x = shots[i].x - cameraX;
-        float y = shots[i].y;
+        float x = s->x - cameraX;
+        float y = s->y;
 
-        rectangle(x - 5, y - 2, 10, 4, GRAY);
-        rectangle(x - 2, y - 4, 4, 8, WHITE);
-        rectangle(x - shots[i].vx * 2,
-                  y - shots[i].vy * 2,
-                  3, 3, GRAY);
+        /* Rastro e projétil são as únicas partes azuis. */
+        rect(x - s->vx * 3, y - s->vy * 3, 8, 4, BLUE);
+        rect(x - 3, y - 3, 7, 7, BLUE);
+        rect(x - 1, y - 1, 3, 3, WHITE);
     }
 }
 
 static void drawMenu(void)
 {
-    rectangle(0, 0, SW, SH, BLACK);
+    rect(0, 0, SW, SH, BLACK);
 
-    rectangle(65, 48, 350, 4, WHITE);
-    rectangle(65, 52, 4, 48, GRAY);
-    rectangle(411, 52, 4, 48, GRAY);
+    rect(65, 45, 350, 3, WHITE);
+    rect(65, 48, 3, 52, WHITE);
+    rect(412, 48, 3, 52, WHITE);
+    rect(65, 100, 350, 3, WHITE);
 
-    drawText(174, 68, "RANDOM", WHITE);
-    drawText(143, 125, "PRESS START", WHITE);
-    drawText(120, 160, "3 CONNECTED ROOMS", GRAY);
+    text(174, 63, "RANDOM", WHITE);
+    text(132, 124, "PRESS START", WHITE);
+    text(126, 157, "EXPLORE CAVE", WHITE);
 
-    rectangle(120, 215, 240, 3, WHITE);
+    rect(120, 215, 240, 3, WHITE);
 }
 
 static void drawIntro(void)
 {
-    rectangle(0, 0, SW, SH, BLACK);
+    rect(0, 0, SW, SH, BLACK);
 
-    drawText(174, 55, "RANDOM", WHITE);
-    drawText(120, 95, "EXPLORE THE CAVE", WHITE);
-    drawText(90, 130, "X JUMP", GRAY);
-    drawText(90, 150, "O MAGIC", GRAY);
-    drawText(90, 180, "START MENU", GRAY);
-    drawText(100, 225, "PRESS START", WHITE);
+    text(174, 36, "RANDOM", WHITE);
+    text(102, 80, "EXPLORE CAVE", WHITE);
+    text(90, 125, "X JUMP", WHITE);
+    text(90, 151, "O MAGIC", WHITE);
+    text(90, 177, "START MENU", WHITE);
+    text(120, 225, "PRESS START", WHITE);
 }
 
-static void drawGame(void)
+static int overlap(float ax, float ay, float aw, float ah,
+                   float bx, float by, float bw, float bh)
 {
-    beginFrame();
-
-    drawCave();
-    drawObjects();
-    drawShots();
-    drawPlayer();
-
-    drawText(8, 8,
-        magicUnlocked ? "MAGIC READY" : "FIND MAGIC",
-        WHITE);
-
-    if (currentRoom == 0)
-        drawText(190, 8, "START", GRAY);
-    else if (currentRoom == 1)
-        drawText(190, 8, "CAVE", GRAY);
-    else
-        drawText(190, 8, "ZONE 1", GRAY);
-
-    endFrame();
+    return ax < bx + bw && ax + aw > bx &&
+           ay < by + bh && ay + ah > by;
 }
 
-static int overlaps(
-    float ax, float ay, float aw, float ah,
-    float bx, float by, float bw, float bh
-)
+static void updateEnemies(void)
 {
-    return ax < bx + bw &&
-           ax + aw > bx &&
-           ay < by + bh &&
-           ay + ah > by;
+    for (int i = 0; i < ENEMY_COUNT; i++) {
+        Enemy *e = &enemies[i];
+
+        if (!e->active)
+            continue;
+
+        e->phase += 0.045f;
+        e->y = e->baseY + sinf(e->phase) * 10.0f;
+
+        /* O inimigo se aproxima do jogador quando está perto. */
+        float dx = px - e->x;
+
+        if (fabsf(dx) < 150.0f) {
+            if (dx > 4.0f)
+                e->x += 0.25f;
+            else if (dx < -4.0f)
+                e->x -= 0.25f;
+        }
+
+        if (overlap(px, py, PW, PH, e->x, e->y, e->w, e->h)) {
+            px = 35.0f;
+            py = 190.0f;
+            pvy = 0.0f;
+            grounded = 0;
+            jumps = 0;
+        }
+    }
 }
 
 static void updateGame(SceCtrlData pad, unsigned int pressed)
 {
-    float vx = 0;
+    float vx = 0.0f;
 
     if (pad.Buttons & PSP_CTRL_LEFT)
-        vx = -2.5f;
+        vx = -2.4f;
 
     if (pad.Buttons & PSP_CTRL_RIGHT)
-        vx = 2.5f;
+        vx = 2.4f;
 
-    playerX += vx;
+    px += vx;
 
-    if (playerX < 0)
-        playerX = 0;
+    if (px < 0)
+        px = 0;
 
-    if (playerX > WORLD_W - PLAYER_W)
-        playerX = WORLD_W - PLAYER_W;
+    if (px > WORLD_W - PW)
+        px = WORLD_W - PW;
 
-    if ((pressed & PSP_CTRL_CROSS) && grounded) {
-        playerVY = -7.5f;
-        grounded = 0;
-        jumps = 1;
-    } else if ((pressed & PSP_CTRL_CROSS) && jumps < 2) {
-        playerVY = -7.0f;
+    if ((pressed & PSP_CTRL_CROSS) && jumps < 2) {
+        pvy = -7.2f;
         grounded = 0;
         jumps++;
     }
 
-    playerVY += 0.32f;
+    float oldBottom = py + PH;
 
-    if (playerVY > 7.0f)
-        playerVY = 7.0f;
+    pvy += 0.30f;
 
-    float oldBottom = playerY + PLAYER_H;
-    playerY += playerVY;
+    if (pvy > 7.0f)
+        pvy = 7.0f;
+
+    py += pvy;
     grounded = 0;
 
+    /* Pisos das três áreas. */
     Rect floors[] = {
-        {0,236,95,36},
-        {110,236,70,36},
-        {195,236,305,36},
-        {500,236,65,36},
-        {665,236,70,36},
-        {820,236,85,36},
-        {1000,236,80,36},
-        {1230,236,70,36},
-        {1400,236,100,36}
-    };
-
-    Rect platforms[] = {
-        {70,194,42,6},{142,165,48,6},
-        {225,190,45,6},{340,155,50,6},
-        {420,195,45,6},{535,180,42,6},
-        {625,145,55,6},{720,170,35,6},
-        {795,130,48,6},{885,165,40,6},
-        {950,180,45,6},{1040,170,45,6},
-        {1130,145,40,6},{1210,115,55,6},
-        {1300,160,45,6},{1380,130,45,6}
+        {0,238,120,34},
+        {145,238,105,34},
+        {275,238,165,34},
+        {470,238,115,34},
+        {620,238,180,34},
+        {800,238,120,34},
+        {945,238,105,34},
+        {1075,238,165,34},
+        {1270,238,115,34},
+        {1420,238,180,34},
+        {1600,238,120,34},
+        {1745,238,105,34},
+        {1875,238,165,34},
+        {2070,238,115,34},
+        {2220,238,180,34}
     };
 
     for (int i = 0; i < (int)(sizeof(floors) / sizeof(floors[0])); i++) {
         Rect f = floors[i];
 
-        if (playerVY >= 0 &&
+        if (pvy >= 0 &&
             oldBottom <= f.y + 2 &&
-            playerY + PLAYER_H >= f.y &&
-            playerX + PLAYER_W > f.x &&
-            playerX < f.x + f.w) {
-            playerY = f.y - PLAYER_H;
-            playerVY = 0;
+            py + PH >= f.y &&
+            px + PW > f.x &&
+            px < f.x + f.w) {
+            py = f.y - PH;
+            pvy = 0;
             grounded = 1;
             jumps = 0;
         }
     }
+
+    /* Plataformas naturais superiores. */
+    Rect platforms[] = {
+        {65,197,47,6},{150,166,43,6},
+        {245,192,40,6},{330,151,52,6},
+        {430,185,42,6},{535,160,46,6},
+        {650,129,55,6},{740,177,40,6},
+        {865,197,47,6},{950,166,43,6},
+        {1045,192,40,6},{1130,151,52,6},
+        {1230,185,42,6},{1335,160,46,6},
+        {1450,129,55,6},{1540,177,40,6},
+        {1665,197,47,6},{1750,166,43,6},
+        {1845,192,40,6},{1930,151,52,6},
+        {2030,185,42,6},{2135,160,46,6},
+        {2250,129,55,6}
+    };
 
     for (int i = 0; i < (int)(sizeof(platforms) / sizeof(platforms[0])); i++) {
         Rect p = platforms[i];
 
-        if (playerVY >= 0 &&
+        if (pvy >= 0 &&
             oldBottom <= p.y + 2 &&
-            playerY + PLAYER_H >= p.y &&
-            playerX + PLAYER_W > p.x &&
-            playerX < p.x + p.w) {
-            playerY = p.y - PLAYER_H;
-            playerVY = 0;
+            py + PH >= p.y &&
+            px + PW > p.x &&
+            px < p.x + p.w) {
+            py = p.y - PH;
+            pvy = 0;
             grounded = 1;
             jumps = 0;
         }
     }
 
+    /* A magia é encontrada no primeiro trecho da caverna. */
     if (!magicUnlocked &&
-        overlaps(playerX, playerY, PLAYER_W, PLAYER_H,
-                 130, 165, 35, 30)) {
+        overlap(px, py, PW, PH, 135, 155, 35, 35)) {
         magicUnlocked = 1;
     }
 
-    if (shotCooldown > 0)
-        shotCooldown--;
+    if (cooldown > 0)
+        cooldown--;
 
     if (magicUnlocked &&
         (pressed & PSP_CTRL_CIRCLE) &&
-        shotCooldown == 0) {
+        cooldown == 0) {
         fireMagic();
     }
 
+    updateEnemies();
     updateShots();
 
-    if (playerY > SH + 100) {
-        playerX = 35;
-        playerY = 202;
-        playerVY = 0;
+    if (py > SH + 60) {
+        px = 35.0f;
+        py = 190.0f;
+        pvy = 0.0f;
+        grounded = 0;
+        jumps = 0;
     }
 
-    cameraX = playerX - 210;
+    cameraX = px - 210.0f;
 
     if (cameraX < 0)
         cameraX = 0;
@@ -745,27 +653,51 @@ static void updateGame(SceCtrlData pad, unsigned int pressed)
     if (cameraX > WORLD_W - SW)
         cameraX = WORLD_W - SW;
 
-    if (playerX < 500)
-        currentRoom = 0;
-    else if (playerX < 1000)
-        currentRoom = 1;
+    if (px < 800)
+        room = 0;
+    else if (px < 1600)
+        room = 1;
     else
-        currentRoom = 2;
+        room = 2;
 
-    if (playerX > 1440) {
-        playerX = 35;
-        playerY = 202;
-        playerVY = 0;
+    if (px > WORLD_W - 45) {
+        px = 35.0f;
+        py = 190.0f;
+        pvy = 0.0f;
+        grounded = 0;
+        jumps = 0;
         magicUnlocked = 0;
 
-        for (int i = 0; i < MAX_OBJECTS; i++)
-            objects[i].active = 1;
+        for (int i = 0; i < ENEMY_COUNT; i++) {
+            enemies[i].active = 1;
+            enemies[i].hp = 1;
+        }
 
-        for (int i = 0; i < MAX_SHOTS; i++)
+        for (int i = 0; i < SHOT_COUNT; i++)
             shots[i].active = 0;
     }
 }
 
+static void drawGame(void)
+{
+    beginFrame();
+
+    drawCave();
+    drawEnemies();
+    drawShots();
+    drawPlayer();
+
+    text(8, 8, magicUnlocked ? "MAGIC READY" : "FIND MAGIC", WHITE);
+
+    if (room == 0)
+        text(350, 8, "CAVE", WHITE);
+    else if (room == 1)
+        text(350, 8, "ZONE", WHITE);
+    else
+        text(350, 8, "EXIT", WHITE);
+
+    endFrame();
+}
 
 int main(void)
 {
@@ -774,58 +706,49 @@ int main(void)
     sceCtrlSetSamplingCycle(0);
     sceCtrlSetSamplingMode(PSP_CTRL_MODE_ANALOG);
 
-    initGraphics();
     memset(shots, 0, sizeof(shots));
+
+    initGraphics();
 
     while (1) {
         sceCtrlReadBufferPositive(&pad, 1);
 
-        /* Menu: aceita X, O ou START diretamente.
-           Isso evita depender da detecção de borda. */
-        if (gameState == 0) {
+        unsigned int pressed = pad.Buttons & ~previousButtons;
+        previousButtons = pad.Buttons;
+
+        if (state == 0) {
             beginFrame();
             drawMenu();
             endFrame();
 
-            if (pad.Buttons &
-                (PSP_CTRL_CROSS |
-                 PSP_CTRL_CIRCLE |
-                 PSP_CTRL_START)) {
-                gameState = 1;
+            if (pressed & (PSP_CTRL_START |
+                           PSP_CTRL_CROSS |
+                           PSP_CTRL_CIRCLE)) {
+                state = 1;
             }
-        }
-        else if (gameState == 1) {
+        } else if (state == 1) {
             beginFrame();
             drawIntro();
             endFrame();
 
-            if (pad.Buttons &
-                (PSP_CTRL_CROSS |
-                 PSP_CTRL_CIRCLE |
-                 PSP_CTRL_START)) {
-                gameState = 2;
+            if (pressed & (PSP_CTRL_START |
+                           PSP_CTRL_CROSS |
+                           PSP_CTRL_CIRCLE)) {
+                state = 2;
+            }
+        } else {
+            if (pressed & PSP_CTRL_START) {
+                state = 0;
+            } else {
+                updateGame(pad, pressed);
+                drawGame();
             }
         }
-        else {
-            if (pad.Buttons & PSP_CTRL_START) {
-                gameState = 0;
-                sceKernelDelayThread(200000);
-                continue;
-            }
 
-            /* Compatibilidade com X/O mesmo sem detecção de borda. */
-            unsigned int pressed = pad.Buttons;
-
-            updateGame(pad, pressed);
-            drawGame();
-        }
-
-        sceKernelDelayThread(16667);
+        frame++;
     }
 
     sceGuTerm();
     sceKernelExitGame();
-
     return 0;
 }
-
