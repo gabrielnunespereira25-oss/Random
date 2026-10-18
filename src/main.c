@@ -766,10 +766,10 @@ static void updateGame(SceCtrlData pad, unsigned int pressed)
     }
 }
 
+
 int main(void)
 {
     SceCtrlData pad;
-    unsigned int previousButtons = 0;
 
     sceCtrlSetSamplingCycle(0);
     sceCtrlSetSamplingMode(PSP_CTRL_MODE_ANALOG);
@@ -780,36 +780,47 @@ int main(void)
     while (1) {
         sceCtrlReadBufferPositive(&pad, 1);
 
-        unsigned int pressed =
-            pad.Buttons & ~previousButtons;
-
-        previousButtons = pad.Buttons;
-
+        /* Menu: aceita X, O ou START diretamente.
+           Isso evita depender da detecção de borda. */
         if (gameState == 0) {
             beginFrame();
             drawMenu();
             endFrame();
 
-            if (pressed & PSP_CTRL_START)
+            if (pad.Buttons &
+                (PSP_CTRL_CROSS |
+                 PSP_CTRL_CIRCLE |
+                 PSP_CTRL_START)) {
                 gameState = 1;
+            }
         }
         else if (gameState == 1) {
             beginFrame();
             drawIntro();
             endFrame();
 
-            if (pressed & PSP_CTRL_START)
+            if (pad.Buttons &
+                (PSP_CTRL_CROSS |
+                 PSP_CTRL_CIRCLE |
+                 PSP_CTRL_START)) {
                 gameState = 2;
+            }
         }
         else {
-            if (pressed & PSP_CTRL_START) {
+            if (pad.Buttons & PSP_CTRL_START) {
                 gameState = 0;
+                sceKernelDelayThread(200000);
                 continue;
             }
+
+            /* Compatibilidade com X/O mesmo sem detecção de borda. */
+            unsigned int pressed = pad.Buttons;
 
             updateGame(pad, pressed);
             drawGame();
         }
+
+        sceKernelDelayThread(16667);
     }
 
     sceGuTerm();
@@ -817,3 +828,4 @@ int main(void)
 
     return 0;
 }
+
