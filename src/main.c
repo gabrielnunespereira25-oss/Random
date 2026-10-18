@@ -2,6 +2,7 @@
 #include <pspkernel.h>
 #include <pspdebug.h>
 #include <pspctrl.h>
+#include <pspdisplay.h>
 #include <stdio.h>
 
 PSP_MODULE_INFO("RANDOM", 0, 1, 0);
