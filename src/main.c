@@ -18,6 +18,9 @@ PSP_MAIN_THREAD_ATTR(THREAD_ATTR_USER);
 #define ENEMY_COUNT 12
 #define SHOT_COUNT 6
 #define SPARK_COUNT 32
+
+/* A arena e uma zona separada ligada ao corredor. */
+#define CORRIDOR_START 1600.0f
 #define BOSS_START 1920.0f
 #define BOSS_END 2400.0f
 #define PLAYER_MAX_HP 4
@@ -112,7 +115,7 @@ static Enemy enemies[ENEMY_COUNT] = {
 };
 
 /* =========================================================
-   GRAFICOS
+   GRAFICOS PSP
    ========================================================= */
 
 static void initGraphics(void) {
@@ -234,6 +237,7 @@ static void text(int x, int y, const char *s,
 
 /* =========================================================
    PARTICULAS DE DANO
+   Azul para o jogador, cinza/prata para o chefe.
    ========================================================= */
 
 static void spawnSparks(float x, float y,
@@ -241,8 +245,8 @@ static void spawnSparks(float x, float y,
     for (int n = 0; n < count; n++) {
         for (int i = 0; i < SPARK_COUNT; i++) {
             if (!sparks[i].active) {
-                float angle = n * 0.78539816f;
-                float speed = 1.2f + (n % 3) * 0.65f;
+                float angle = (float)n * 0.78539816f;
+                float speed = 1.2f + (float)(n % 3) * 0.65f;
 
                 sparks[i].x = x;
                 sparks[i].y = y;
@@ -372,6 +376,7 @@ static void caveRoom(int r) {
     wr(s+436,52,4,24,WHITE);
 }
 
+/* Corredor que conecta as cavernas a uma nova zona. */
 static void drawTransitionCorridor(void) {
     stalactite(1630,24,24);
     stalactite(1740,30,30);
@@ -385,25 +390,36 @@ static void drawTransitionCorridor(void) {
     platform(1750,166,43);
     platform(1845,192,40);
 
-    /* Portal de entrada da arena. */
-    if (!bossEncounterStarted) {
-        wr(1900,105,8,133,DARK_GRAY);
-        wr(1908,105,5,133,GRAY);
-        wr(1895,101,23,5,WHITE);
-        wr(1910,118,3,25,WHITE);
-        wr(1910,160,3,25,WHITE);
-    } else {
-        wr(1900,105,8,133,DARK_GRAY);
-        wr(1908,105,5,133,DARK_GRAY);
+    /* Arco da entrada. O centro fica livre para atravessar. */
+    wr(1892,105,7,133,DARK_GRAY);
+    wr(1899,105,4,133,GRAY);
+    wr(1887,101,22,5,WHITE);
+    wr(1903,111,3,23,WHITE);
+    wr(1903,151,3,23,WHITE);
+    wr(1903,191,3,23,WHITE);
+
+    if (bossEncounterStarted) {
+        /* Marca visual de que a passagem foi atravessada. */
+        wr(1894,112,3,115,DARK_GRAY);
+        wr(1900,112,2,115,DARK_GRAY);
     }
 }
 
+/*
+   NOVA ZONA: SANTUARIO DO HOLLOW GUARD.
+   O cenário muda depois da entrada em BOSS_START.
+   A arena tem paredes visuais, colunas e uma saída bloqueada.
+*/
 static void drawBossRoom(void) {
     wr(BOSS_START,15,480,5,GRAY);
     wr(BOSS_START,20,480,3,DARK_GRAY);
 
+    /* Fundo mais pesado para diferenciar a sala da caverna. */
+    wr(BOSS_START,23,480,212,BLACK);
+
     for (int i = 0; i < 4; i++) {
         float x = 1960 + i*125;
+
         wr(x,38,24,100,DARK_GRAY);
         wr(x+5,38,14,100,GRAY);
         wr(x-4,38,32,5,WHITE);
@@ -412,6 +428,7 @@ static void drawBossRoom(void) {
         wr(x+8,78,3,15,WHITE);
     }
 
+    /* Marcas antigas nas paredes da arena. */
     for (int i = 0; i < 5; i++) {
         float x = 1980 + i*88;
         wr(x,155,18,2,GRAY);
@@ -419,6 +436,7 @@ static void drawBossRoom(void) {
         wr(x+8,169,10,2,GRAY);
     }
 
+    /* Altar quebrado no fundo da sala. */
     wr(2110,205,100,8,DARK_GRAY);
     wr(2120,193,80,12,GRAY);
     wr(2130,183,60,10,WHITE);
@@ -427,22 +445,23 @@ static void drawBossRoom(void) {
     wr(2155,177,5,5,BLACK);
     wr(2165,177,5,5,WHITE);
 
+    /* Chao e plataformas exclusivos da arena. */
     platform(BOSS_START,238,480);
     platform(2030,185,42);
     platform(2135,160,46);
     platform(2250,129,55);
 
-    /* Parede da entrada: desaparece visualmente apos entrar. */
-    if (!bossEncounterStarted) {
-        wr(1920,105,4,133,GRAY);
-        wr(1925,105,3,133,DARK_GRAY);
-    }
+    /* Colunas que emolduram a entrada, sem bloquear a passagem. */
+    wr(1920,105,5,133,DARK_GRAY);
+    wr(1925,105,4,133,GRAY);
+    wr(1920,100,23,5,WHITE);
 
-    /* Porta de saída. */
+    /* Portao de saida, abre depois da derrota do chefe. */
     if (bossDefeated) {
         wr(2360,185,5,53,WHITE);
         wr(2368,175,5,63,GRAY);
         wr(2376,185,5,53,WHITE);
+        wr(2358,180,24,3,LIGHT_BLUE);
     } else {
         wr(2360,185,5,53,DARK_GRAY);
         wr(2368,175,5,63,GRAY);
@@ -458,12 +477,13 @@ static void drawCave(void) {
 
     wr(790,200,20,38,BLACK);
     wr(1590,200,20,38,BLACK);
+
     wr(0,0,5,238,WHITE);
     wr(WORLD_W-5,0,5,238,WHITE);
 }
 
 /* =========================================================
-   JOGADOR E ANIMACAO
+   JOGADOR
    ========================================================= */
 
 static void drawPlayer(void) {
@@ -486,7 +506,6 @@ static void drawPlayer(void) {
     rect(x+7,y+13,4,4,GRAY);
 
     if (!grounded) {
-        /* Bracos mudam de pose durante o salto. */
         if (rising) {
             rect(x-1,y+8,5,8,WHITE);
             rect(x+14,y+8,5,8,WHITE);
@@ -528,7 +547,7 @@ static void drawPlayer(void) {
 }
 
 /* =========================================================
-   VIDA
+   VIDA DO JOGADOR
    ========================================================= */
 
 static void drawPlayerHealth(void) {
@@ -551,7 +570,7 @@ static void playerTakeDamage(void) {
     spawnPlayerSparks();
     playerDamageCooldown = 60;
 
-    pvy = -3.8f;
+    pvy = -4.2f;
     grounded = 0;
     jumps = 0;
     jumpCut = 0;
@@ -600,6 +619,7 @@ static void updateEnemies(void) {
             else if (dx < -4) e->x -= 0.25f;
         }
 
+        /* Inimigos comuns nao entram no santuario do chefe. */
         if (e->x+e->w > BOSS_START-10)
             e->x = BOSS_START-e->w-10;
 
@@ -660,7 +680,8 @@ static int nearestEnemy(float x, float y) {
         }
     }
 
-    if (boss.active) {
+    /* O chefe so pode ser alvo depois de entrar na arena. */
+    if (boss.active && bossEncounterStarted) {
         float dx = boss.x+18-x;
         float dy = boss.y+22-y;
         float d = dx*dx+dy*dy;
@@ -682,9 +703,11 @@ static void fireMagic(void) {
         shots[i].x = px+PW*.5f;
         shots[i].y = py+PH*.5f;
 
-        shots[i].vx = (target==ENEMY_COUNT)
-            ? ((boss.x>px)?3.5f:-3.5f)
-            : 3.5f*swordFacing;
+        if (target == ENEMY_COUNT) {
+            shots[i].vx = (boss.x > px) ? 3.5f : -3.5f;
+        } else {
+            shots[i].vx = 3.5f*swordFacing;
+        }
 
         shots[i].vy = 0;
         shots[i].target = target;
@@ -704,7 +727,7 @@ static void updateShots(void) {
         if (s->target >= 0 && s->target < ENEMY_COUNT)
             valid = enemies[s->target].active;
         else if (s->target == ENEMY_COUNT)
-            valid = boss.active;
+            valid = boss.active && bossEncounterStarted;
 
         if (!valid) {
             s->target = nearestEnemy(s->x,s->y);
@@ -732,7 +755,8 @@ static void updateShots(void) {
 
         if (d < 12) {
             if (s->target == ENEMY_COUNT) {
-                if (boss.active && boss.damageCooldown == 0) {
+                if (boss.active && bossEncounterStarted &&
+                    boss.damageCooldown == 0) {
                     boss.hp--;
                     boss.damageCooldown = 12;
                     spawnBossSparks();
@@ -787,7 +811,7 @@ static void drawShots(void) {
 }
 
 /* =========================================================
-   ESPADA
+   ESPADA E MEIA-LUA ANIMADA
    ========================================================= */
 
 static void attackSword(void) {
@@ -818,7 +842,8 @@ static void applySwordDamage(void) {
         }
     }
 
-    if (boss.active && boss.damageCooldown == 0 &&
+    if (boss.active && bossEncounterStarted &&
+        boss.damageCooldown == 0 &&
         overlap(ax,ay,34,28,boss.x,boss.y,40,44)) {
         boss.hp--;
         boss.damageCooldown = 12;
@@ -832,55 +857,72 @@ static void applySwordDamage(void) {
     }
 }
 
+/*
+   A meia-lua se move a cada quadro.
+   Os blocos seguem um arco que avanca durante o golpe.
+   A direcao e espelhada quando o jogador olha para a esquerda.
+*/
 static void drawSword(void) {
     if (swordTimer <= 0) return;
 
     float x = px-cameraX;
-    float y = py+11;
-    int t = swordTimer;
+    float y = py+15.0f;
 
+    float progress = (10.0f-(float)swordTimer)/9.0f;
+
+    if (progress < 0.0f) progress = 0.0f;
+    if (progress > 1.0f) progress = 1.0f;
+
+    /* Punho e lamina principal mudam de lado com a direcao. */
     if (swordFacing > 0) {
-        rect(x+15,y-8,4,18,GRAY);
-        rect(x+18,y-13,4,22,WHITE);
-        rect(x+22,y-17,4,22,GRAY);
-        rect(x+26,y-20,4,20,WHITE);
-        rect(x+14,y+1,19,3,DARK_GRAY);
-        rect(x+17,y-2,3,8,WHITE);
-
-        if (t > 2) {
-            rect(x+25,y-29,5,4,LIGHT_BLUE);
-            rect(x+33,y-26,5,4,WHITE);
-            rect(x+40,y-20,5,4,GRAY);
-            rect(x+44,y-12,5,4,WHITE);
-            rect(x+45,y-4,5,4,LIGHT_BLUE);
-
-            if (t > 6) {
-                rect(x+29,y-32,4,3,GRAY);
-                rect(x+37,y-28,4,3,LIGHT_BLUE);
-                rect(x+46,y-16,4,3,GRAY);
-            }
-        }
+        rect(x+12,y-3,7,4,DARK_GRAY);
+        rect(x+17,y-6,5,4,GRAY);
     } else {
-        rect(x-1,y-8,4,18,GRAY);
-        rect(x-5,y-13,4,22,WHITE);
-        rect(x-9,y-17,4,22,GRAY);
-        rect(x-13,y-20,4,20,WHITE);
-        rect(x-14,y+1,19,3,DARK_GRAY);
-        rect(x-5,y-2,3,8,WHITE);
+        rect(x-1,y-3,7,4,DARK_GRAY);
+        rect(x-4,y-6,5,4,GRAY);
+    }
 
-        if (t > 2) {
-            rect(x-30,y-29,5,4,LIGHT_BLUE);
-            rect(x-38,y-26,5,4,WHITE);
-            rect(x-45,y-20,5,4,GRAY);
-            rect(x-49,y-12,5,4,WHITE);
-            rect(x-50,y-4,5,4,LIGHT_BLUE);
+    /*
+       A meia-lua percorre o arco em vez de ficar parada.
+       A distancia varia para dar sensacao de impulso.
+    */
+    for (int i = 0; i < 9; i++) {
+        float part = (float)i/8.0f;
+        float angle = -1.45f + part*2.90f;
+        float sweep = progress*2.20f-0.55f;
 
-            if (t > 6) {
-                rect(x-34,y-32,4,3,GRAY);
-                rect(x-42,y-28,4,3,LIGHT_BLUE);
-                rect(x-51,y-16,4,3,GRAY);
-            }
+        angle += sweep;
+
+        float radius = 22.0f + sinf(progress*3.14159265f)*10.0f;
+        float side = (float)swordFacing;
+
+        float sx = x+PW*0.5f + cosf(angle)*radius*side;
+        float sy = y + sinf(angle)*radius;
+
+        float size = (i%3 == 0) ? 5.0f : 4.0f;
+
+        if (i < 3 || i > 6)
+            rect(sx-2.0f,sy-2.0f,size,size,GRAY);
+        else
+            rect(sx-2.0f,sy-2.0f,size,size,WHITE);
+
+        /* Brilho azul acompanha a ponta do arco. */
+        if (i == 4 || i == 5 || i == 6) {
+            rect(sx,sy-3.0f,3,3,LIGHT_BLUE);
         }
+    }
+
+    /* Ponta brilhante em movimento. */
+    {
+        float angle = -1.45f + progress*2.90f;
+        float radius = 30.0f + sinf(progress*3.14159265f)*10.0f;
+        float sx = x+PW*0.5f +
+                   cosf(angle)*radius*(float)swordFacing;
+        float sy = y+sin
+f(angle)*radius;
+
+        rect(sx-2,sy-2,5,5,LIGHT_BLUE);
+        rect(sx,sy,2,2,WHITE);
     }
 }
 
@@ -889,7 +931,8 @@ static void drawSword(void) {
    ========================================================= */
 
 static void drawMiniBoss(void) {
-    if (!boss.active) return;
+    if (!boss.active || !bossEncounterStarted)
+        return;
 
     float x = boss.x-cameraX;
     float y = boss.y;
@@ -939,7 +982,10 @@ static void drawMiniBoss(void) {
 }
 
 static void updateMiniBoss(void) {
-    if (!boss.active || bossDefeated) return;
+    /* O chefe fica inativo ate o jogador atravessar a entrada. */
+    if (!boss.active || bossDefeated ||
+        !bossEncounterStarted)
+        return;
 
     if (boss.contactCooldown > 0)
         boss.contactCooldown--;
@@ -1013,10 +1059,13 @@ static void updateMiniBoss(void) {
         else
             px = boss.x+42;
 
-        if (px < BOSS_START) px = BOSS_START;
-        if (px > WORLD_W-PW) px = WORLD_W-PW;
+        if (px < BOSS_START+5)
+            px = BOSS_START+5;
 
-        pvy = -3.8f;
+        if (px > BOSS_END-PW-30)
+            px = BOSS_END-PW-30;
+
+        pvy = -4.2f;
         grounded = 0;
         jumps = 0;
         jumpCut = 0;
@@ -1043,33 +1092,56 @@ static void drawBossHUD(void) {
 }
 
 /* =========================================================
-   COLISAO COM O CHAO E PLATAFORMAS
+   COLISAO COM CHAO E PLATAFORMAS
    ========================================================= */
 
 static void resolvePlatforms(float oldBottom) {
     static const Rect floors[] = {
-        {0,238,120,34},{145,238,105,34},
-        {275,238,165,34},{470,238,115,34},
-        {620,238,180,34},{800,238,120,34},
-        {945,238,105,34},{1075,238,165,34},
-        {1270,238,115,34},{1420,238,180,34},
-        {1600,238,320,34},{1920,238,480,34}
+        {0,238,120,34},
+        {145,238,105,34},
+        {275,238,165,34},
+        {470,238,115,34},
+        {620,238,180,34},
+
+        {800,238,120,34},
+        {945,238,105,34},
+        {1075,238,165,34},
+        {1270,238,115,34},
+        {1420,238,180,34},
+
+        {1600,238,320,34},
+        {1920,238,480,34}
     };
 
     static const Rect plats[] = {
-        {65,197,47,6},{150,166,43,6},{245,192,40,6},
-        {330,151,52,6},{430,185,42,6},{535,160,46,6},
-        {650,129,55,6},{740,177,40,6},
-        {865,197,47,6},{950,166,43,6},{1045,192,40,6},
-        {1130,151,52,6},{1230,185,42,6},{1335,160,46,6},
-        {1450,129,55,6},{1540,177,40,6},
-        {1665,197,47,6},{1750,166,43,6},{1845,192,40,6},
-        {2030,185,42,6},{2135,160,46,6},{2250,129,55,6}
+        {65,197,47,6},
+        {150,166,43,6},
+        {245,192,40,6},
+        {330,151,52,6},
+        {430,185,42,6},
+        {535,160,46,6},
+        {650,129,55,6},
+        {740,177,40,6},
+
+        {865,197,47,6},
+        {950,166,43,6},
+        {1045,192,40,6},
+        {1130,151,52,6},
+        {1230,185,42,6},
+        {1335,160,46,6},
+        {1450,129,55,6},
+        {1540,177,40,6},
+
+        {1665,197,47,6},
+        {1750,166,43,6},
+        {1845,192,40,6},
+
+        {2030,185,42,6},
+        {2135,160,46,6},
+        {2250,129,55,6}
     };
 
-    int i;
-
-    for (i = 0; i < (int)(sizeof(floors)/sizeof(floors[0])); i++) {
+    for (int i = 0; i < (int)(sizeof(floors)/sizeof(floors[0])); i++) {
         Rect f = floors[i];
 
         if (pvy >= 0 && oldBottom <= f.y+2 &&
@@ -1083,7 +1155,7 @@ static void resolvePlatforms(float oldBottom) {
         }
     }
 
-    for (i = 0; i < (int)(sizeof(plats)/sizeof(plats[0])); i++) {
+    for (int i = 0; i < (int)(sizeof(plats)/sizeof(plats[0])); i++) {
         Rect p = plats[i];
 
         if (pvy >= 0 && oldBottom <= p.y+2 &&
@@ -1117,33 +1189,44 @@ static void updateGame(SceCtrlData pad, unsigned int pressed) {
 
     playerMoving = (vx != 0 && grounded);
 
-    /* Controle lateral durante o salto. */
+    /* Movimento horizontal. */
     px += vx;
 
-    if (px < 0) px = 0;
-    if (px > WORLD_W-PW) px = WORLD_W-PW;
+    if (px < 0)
+        px = 0;
 
-    /* Primeiro pulo e duplo pulo. */
+    if (px > WORLD_W-PW)
+        px = WORLD_W-PW;
+
+    /*
+       Salto melhorado:
+       primeiro salto mais alto, duplo salto forte,
+       gravidade mais suave e altura controlada ao soltar X.
+    */
     if ((pressed & PSP_CTRL_CROSS) && jumps < 2) {
-        pvy = (jumps == 0) ? -8.4f : -7.6f;
+        if (jumps == 0)
+            pvy = -9.2f;
+        else
+            pvy = -8.3f;
+
         grounded = 0;
         jumps++;
         jumpCut = 0;
     }
 
-    /* Soltar X reduz a altura do salto uma vez. */
+    /* Soltar X durante a subida reduz a altura do salto. */
     if (!(pad.Buttons & PSP_CTRL_CROSS) &&
         pvy < -2.0f && !jumpCut) {
-        pvy *= 0.58f;
+        pvy *= 0.62f;
         jumpCut = 1;
     }
 
     float oldBottom = py+PH;
 
-    pvy += 0.27f;
+    pvy += 0.25f;
 
-    if (pvy > 6.5f)
-        pvy = 6.5f;
+    if (pvy > 6.8f)
+        pvy = 6.8f;
 
     py += pvy;
     grounded = 0;
@@ -1156,9 +1239,14 @@ static void updateGame(SceCtrlData pad, unsigned int pressed) {
         magicUnlocked = 1;
     }
 
-    if (swordCooldown > 0) swordCooldown--;
-    if (swordTimer > 0) swordTimer--;
-    if (magicCooldown > 0) magicCooldown--;
+    if (swordCooldown > 0)
+        swordCooldown--;
+
+    if (swordTimer > 0)
+        swordTimer--;
+
+    if (magicCooldown > 0)
+        magicCooldown--;
 
     if (playerDamageCooldown > 0)
         playerDamageCooldown--;
@@ -1177,12 +1265,16 @@ static void updateGame(SceCtrlData pad, unsigned int pressed) {
     updateEnemies();
 
     /*
-       A arena e uma sala separada depois do corredor.
-       Ao atravessar a entrada, a luta comeca e o jogador
-       fica dentro dos limites da arena ate derrotar o chefe.
+       Entrada da nova zona.
+       O chefe so desperta quando o jogador cruza BOSS_START.
+       Depois de entrar, o jogador nao pode voltar ao corredor
+       enquanto o chefe estiver vivo.
     */
-    if (px >= BOSS_START)
+    if (px >= BOSS_START && !bossEncounterStarted) {
         bossEncounterStarted = 1;
+        boss.timer = 0;
+        boss.attack = 0;
+    }
 
     updateMiniBoss();
     updateShots();
@@ -1202,12 +1294,18 @@ static void updateGame(SceCtrlData pad, unsigned int pressed) {
         }
     }
 
-    if (boss.active && bossEncounterStarted) {
-        if (px < BOSS_START)
-            px = BOSS_START;
+    /* Arena fechada durante a luta. */
+    if (bossEncounterStarted && !bossDefeated) {
+        if (px < BOSS_START+5)
+            px = BOSS_START+5;
 
         if (px > BOSS_END-PW-30)
             px = BOSS_END-PW-30;
+    }
+
+    /* A saida so pode ser atravessada depois da vitoria. */
+    if (bossDefeated && px > BOSS_END-PW-25) {
+        state = 3;
     }
 
     cameraX = px-210;
@@ -1218,10 +1316,14 @@ static void updateGame(SceCtrlData pad, unsigned int pressed) {
     if (cameraX > WORLD_W-SW)
         cameraX = WORLD_W-SW;
 
-    room = px < 800 ? 0 : (px < 1600 ? 1 : 2);
-
-    if (px > WORLD_W-45 && bossDefeated)
-        state = 3;
+    if (px < 800)
+        room = 0;
+    else if (px < CORRIDOR_START)
+        room = 1;
+    else if (px < BOSS_START)
+        room = 2;
+    else
+        room = 3;
 }
 
 /* =========================================================
@@ -1284,8 +1386,10 @@ static void drawGame(void) {
         text(350,8,"CAVE",WHITE);
     else if (room == 1)
         text(350,8,"DEPTHS",WHITE);
+    else if (room == 2)
+        text(326,8,"CORRIDOR",WHITE);
     else
-        text(350,8,bossDefeated ? "EXIT OPEN" : "SANCTUARY",WHITE);
+        text(326,8,bossDefeated ? "EXIT OPEN" : "SANCTUARY",WHITE);
 
     drawBossHUD();
 
@@ -1293,14 +1397,18 @@ static void drawGame(void) {
 }
 
 static void drawEnding(void) {
+    beginFrame();
+
     rect(0,0,SW,SH,BLACK);
     text(174,52,"RANDOM",WHITE);
     text(66,105,"THE WORLD CONTINUES",WHITE);
     text(102,145,"PRESS START",WHITE);
+
+    endFrame();
 }
 
 /* =========================================================
-   RESET
+   RESET DO MUNDO
    ========================================================= */
 
 static void resetWorld(void) {
@@ -1319,11 +1427,13 @@ static void resetWorld(void) {
     swordCooldown = 0;
     swordTimer = 0;
     swordHitDone = 0;
+    swordFacing = 1;
 
     playerHP = PLAYER_MAX_HP;
     playerDamageCooldown = 0;
 
     bossEncounterStarted = 0;
+    room = 0;
 
     memset(shots,0,sizeof(shots));
     memset(sparks,0,sizeof(sparks));
@@ -1333,6 +1443,7 @@ static void resetWorld(void) {
         enemies[i].hp = 1;
     }
 
+    /* Este inimigo fica desativado na sala do chefe. */
     enemies[ENEMY_COUNT-1].active = 0;
 
     boss.x = 2180;
@@ -1406,9 +1517,7 @@ int main(void) {
                 drawGame();
             }
         } else {
-            beginFrame();
             drawEnding();
-            endFrame();
 
             if (pressed & PSP_CTRL_START) {
                 resetWorld();
