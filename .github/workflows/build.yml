@@ -1,0 +1,26 @@
+
+name: Build RANDOM PSP
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container:
+      image: pspdev/pspdev:latest
+
+    steps:
+      - name: Baixar codigo
+        uses: actions/checkout@v4
+
+      - name: Compilar RANDOM
+        run: make clean && make
+
+      - name: Disponibilizar EBOOT.PBP
+        uses: actions/upload-artifact@v4
+        with:
+          name: RANDOM-Beta-0.1
+          path: EBOOT.PBP
+          if-no-files-found: error
