@@ -5,6 +5,7 @@
 #include <pspctrl.h>
 #include <math.h>
 #include <string.h>
+#include <stdlib.h>
 
 PSP_MODULE_INFO("RANDOM", 0, 1, 0);
 PSP_MAIN_THREAD_ATTR(THREAD_ATTR_USER);
@@ -12,1520 +13,854 @@ PSP_MAIN_THREAD_ATTR(THREAD_ATTR_USER);
 #define SW 480
 #define SH 272
 #define STRIDE 512
+
 #define WORLD_W 2400.0f
 #define PW 18.0f
 #define PH 30.0f
-#define ENEMY_COUNT 12
+
+#define PLAYER_MAX_HP 4
+#define BOSS_MAX_HP 10
+
 #define SHOT_COUNT 6
 #define SPARK_COUNT 32
+#define ENEMY_COUNT 6
 
-/* A arena e uma zona separada ligada ao corredor. */
-#define CORRIDOR_START 1600.0f
 #define BOSS_START 1920.0f
 #define BOSS_END 2400.0f
-#define PLAYER_MAX_HP 4
 
-#define WHITE      0xFFFFFFFF
-#define BLACK      0xFF000000
-#define GRAY       0xFFAAAAAA
-#define DARK_GRAY  0xFF555555
 #define BLUE       0xFFFF8040
 #define LIGHT_BLUE 0xFFFFD080
-
-typedef struct {
-    float x, y, w, h;
-} Rect;
+#define WHITE      0xFFFFFFFF
+#define SILVER     0xFFBFC5C9
+#define DARK       0xFF17121D
+#define ROCK       0xFF403443
+#define ROCK_LIGHT 0xFF62516A
+#define RED        0xFF3030D0
+#define PURPLE     0xFFB060B0
+#define GREEN      0xFF50C060
+#define GOLD       0xFF40C0FF
 
 typedef struct {
     float x, y, vx, vy;
-    int active, target;
+    int active;
+    int life;
 } Shot;
 
 typedef struct {
-    float x, y, baseY, w, h, phase;
-    int active, hp;
-} Enemy;
-
-typedef struct {
+    float x, y, vx, vy;
+    int active;
+    int life;
     unsigned int color;
-    float x, y, z;
-} Vertex;
+} Spark;
 
 typedef struct {
     float x, y, vx, vy;
-    int hp, active, timer, attack;
-    int contactCooldown, damageCooldown, grounded;
+    int hp;
+    int active;
+    int grounded;
+    int attackTimer;
+    int damageCooldown;
 } MiniBoss;
 
 typedef struct {
     float x, y, vx, vy;
-    int life, active;
-    unsigned int color;
-} Spark;
+    int hp;
+    int facing;
+    int grounded;
+    int jumps;
+    int attackTimer;
+    int damageCooldown;
+    int magicUnlocked;
+    int magicCooldown;
+    int invulnerable;
+} Player;
 
-static unsigned int __attribute__((aligned(16))) displayList[262144];
+static unsigned int __attribute__((aligned(16))) list[262144];
+static unsigned int __attribute__((aligned(16))) framebuffer[512 * 272];
 
-static int state = 0;
-static int magicUnlocked = 0;
-static int grounded = 0;
-static int jumps = 0;
-static int magicCooldown = 0;
-static int swordCooldown = 0;
-static int swordTimer = 0;
-static int swordFacing = 1;
-static int room = 0;
-static int frame = 0;
-static int introPage = 0;
-static int playerMoving = 0;
-static int bossDefeated = 0;
-static int bossEncounterStarted = 0;
-static int swordHitDone = 0;
-static int jumpCut = 0;
-static int playerHP = PLAYER_MAX_HP;
-static int playerDamageCooldown = 0;
-
-static float px = 35.0f;
-static float py = 190.0f;
-static float pvy = 0.0f;
-static float cameraX = 0.0f;
-
-static unsigned int previousButtons = 0;
-
+static Player player;
+static MiniBoss boss;
 static Shot shots[SHOT_COUNT];
 static Spark sparks[SPARK_COUNT];
 
-static MiniBoss boss = {
-    2180.0f, 194.0f, 0, 0,
-    10, 1, 0, 0, 0, 0, 1
-};
+static float cameraX = 0.0f;
+static int gameState = 0;
+static int bossStarted = 0;
+static int bossDefeated = 0;
+static int frameCount = 0;
+static int swordHitDone = 0;
+static int bossHitFlash = 0;
 
-static Enemy enemies[ENEMY_COUNT] = {
-    {160,170,170,18,18,0.0f,1,1},
-    {300,130,130,18,18,1.2f,1,1},
-    {430,175,175,18,18,2.1f,1,1},
-    {610,150,150,18,18,0.7f,1,1},
-    {760,110,110,18,18,1.8f,1,1},
-    {900,170,170,18,18,2.8f,1,1},
-    {1080,140,140,18,18,0.3f,1,1},
-    {1230,100,100,18,18,1.4f,1,1},
-    {1400,160,160,18,18,2.5f,1,1},
-    {1630,135,135,18,18,0.9f,1,1},
-    {1870,100,100,18,18,1.7f,1,1},
-    {2200,145,145,18,18,2.7f,0,1}
-};
+static unsigned int oldButtons = 0;
 
-/* =========================================================
-   GRAFICOS PSP
-   ========================================================= */
-
-static void initGraphics(void) {
-    sceGuInit();
-    sceGuStart(GU_DIRECT, displayList);
-
-    sceGuDrawBuffer(GU_PSM_8888, (void*)0, STRIDE);
-    sceGuDispBuffer(SW, SH, (void*)0x88000, STRIDE);
-    sceGuDepthBuffer((void*)0x110000, STRIDE);
-
-    sceGuOffset(2048 - SW / 2, 2048 - SH / 2);
-    sceGuViewport(2048, 2048, SW, SH);
-    sceGuScissor(0, 0, SW, SH);
-
-    sceGuEnable(GU_SCISSOR_TEST);
-    sceGuDisable(GU_DEPTH_TEST);
-    sceGuDisable(GU_CULL_FACE);
-    sceGuDisable(GU_TEXTURE_2D);
-    sceGuShadeModel(GU_FLAT);
-
-    sceGuClearColor(BLACK);
-    sceGuClear(GU_COLOR_BUFFER_BIT);
-
-    sceGuFinish();
-    sceGuSync(0, 0);
-    sceDisplayWaitVblankStart();
-    sceGuDisplay(GU_TRUE);
+static unsigned int pressed(unsigned int buttons, unsigned int key)
+{
+    return (buttons & key) && !(oldButtons & key);
 }
 
-static void beginFrame(void) {
-    sceGuStart(GU_DIRECT, displayList);
-    sceGuClearColor(BLACK);
-    sceGuClear(GU_COLOR_BUFFER_BIT);
-}
+static void rect(float x, float y, float w, float h, unsigned int color)
+{
+    if (w <= 0 || h <= 0) return;
 
-static void endFrame(void) {
-    sceGuFinish();
-    sceGuSync(0, 0);
-    sceDisplayWaitVblankStart();
-    sceGuSwapBuffers();
-}
+    struct Vertex {
+        unsigned short u, v;
+        unsigned short color;
+        float x, y, z;
+    };
 
-static void rect(float x, float y, float w, float h,
-                 unsigned int color) {
-    Vertex *v = (Vertex*)sceGuGetMemory(2 * sizeof(Vertex));
+    struct Vertex *v = (struct Vertex *)sceGuGetMemory(sizeof(struct Vertex) * 2);
 
+    v[0].u = v[0].v = 0;
     v[0].color = color;
     v[0].x = x;
     v[0].y = y;
     v[0].z = 0;
 
+    v[1].u = v[1].v = 0;
     v[1].color = color;
     v[1].x = x + w;
     v[1].y = y + h;
     v[1].z = 0;
 
+    sceGuDisable(GU_TEXTURE_2D);
+    sceGuColor(color);
     sceGuDrawArray(
         GU_SPRITES,
-        GU_COLOR_8888 | GU_VERTEX_32BITF | GU_TRANSFORM_2D,
-        2, 0, v
+        GU_COLOR_8888 | GU_VERTEX_32BITF,
+        2,
+        0,
+        v
     );
 }
 
-static void wr(float x, float y, float w, float h,
-               unsigned int color) {
-    rect(x - cameraX, y, w, h, color);
-}
-
-static int overlap(float ax, float ay, float aw, float ah,
-                   float bx, float by, float bw, float bh) {
-    return ax < bx + bw && ax + aw > bx &&
-           ay < by + bh && ay + ah > by;
-}
-
-/* =========================================================
-   TEXTO PIXEL
-   ========================================================= */
-
-static void letter(int x, int y, char c,
-                   unsigned int color) {
-    static const unsigned char g[26][5] = {
-        {126,17,17,17,126},{127,73,73,73,54},
-        {62,65,65,65,34},{127,65,65,34,28},
-        {127,73,73,73,65},{127,9,9,9,1},
-        {62,65,73,73,122},{127,8,8,8,127},
-        {0,65,127,65,0},{32,64,65,63,1},
-        {127,8,20,34,65},{127,64,64,64,64},
-        {127,2,12,2,127},{127,4,8,16,127},
-        {62,65,65,65,62},{127,9,9,9,6},
-        {62,65,81,33,94},{127,9,25,41,70},
-        {70,73,73,73,49},{1,1,127,1,1},
-        {63,64,64,64,63},{31,32,64,32,31},
-        {63,64,56,64,63},{99,20,8,20,99},
-        {7,8,112,8,7},{97,81,73,69,67}
-    };
-
-    if (c < 'A' || c > 'Z') return;
-
-    for (int col = 0; col < 5; col++) {
-        for (int row = 0; row < 7; row++) {
-            if (g[c-'A'][col] & (1 << row))
-                rect(x + col*2, y + row*2, 2, 2, color);
-        }
+static void circle(float x, float y, float radius, unsigned int color)
+{
+    for (int i = 0; i < 12; i++) {
+        float a = (float)i * 6.2831853f / 12.0f;
+        float px = x + cosf(a) * radius;
+        float py = y + sinf(a) * radius;
+        rect(px - 2, py - 2, 4, 4, color);
     }
 }
 
-static void text(int x, int y, const char *s,
-                 unsigned int color) {
-    while (*s) {
-        if (*s == ' ')
-            x += 12;
-        else {
-            letter(x, y, *s, color);
-            x += 12;
-        }
-        s++;
-    }
-}
+static void spawnSparks(float x, float y, unsigned int color, int amount)
+{
+    for (int i = 0; i < amount; i++) {
+        for (int j = 0; j < SPARK_COUNT; j++) {
+            if (!sparks[j].active) {
+                float angle = (float)(rand() % 628) / 100.0f;
+                float speed = 0.7f + (float)(rand() % 30) / 10.0f;
 
-/* =========================================================
-   PARTICULAS DE DANO
-   Azul para o jogador, cinza/prata para o chefe.
-   ========================================================= */
-
-static void spawnSparks(float x, float y,
-                        unsigned int color, int count) {
-    for (int n = 0; n < count; n++) {
-        for (int i = 0; i < SPARK_COUNT; i++) {
-            if (!sparks[i].active) {
-                float angle = (float)n * 0.78539816f;
-                float speed = 1.2f + (float)(n % 3) * 0.65f;
-
-                sparks[i].x = x;
-                sparks[i].y = y;
-                sparks[i].vx = cosf(angle) * speed;
-                sparks[i].vy = sinf(angle) * speed - 1.0f;
-                sparks[i].life = 12 + n % 5;
-                sparks[i].active = 1;
-                sparks[i].color = color;
+                sparks[j].x = x;
+                sparks[j].y = y;
+                sparks[j].vx = cosf(angle) * speed;
+                sparks[j].vy = sinf(angle) * speed - 0.8f;
+                sparks[j].life = 14 + rand() % 15;
+                sparks[j].active = 1;
+                sparks[j].color = color;
                 break;
             }
         }
     }
 }
 
-static void spawnPlayerSparks(void) {
-    spawnSparks(px + PW/2, py + PH/2, LIGHT_BLUE, 8);
-    spawnSparks(px + PW/2, py + PH/2, BLUE, 4);
-}
-
-static void spawnBossSparks(void) {
-    spawnSparks(boss.x + 20, boss.y + 22, GRAY, 8);
-    spawnSparks(boss.x + 20, boss.y + 22, WHITE, 4);
-}
-
-static void updateSparks(void) {
+static void updateSparks(void)
+{
     for (int i = 0; i < SPARK_COUNT; i++) {
-        Spark *s = &sparks[i];
-        if (!s->active) continue;
+        if (!sparks[i].active) continue;
 
-        s->x += s->vx;
-        s->y += s->vy;
-        s->vy += 0.10f;
-        s->life--;
+        sparks[i].x += sparks[i].vx;
+        sparks[i].y += sparks[i].vy;
+        sparks[i].vy += 0.12f;
+        sparks[i].life--;
 
-        if (s->life <= 0)
-            s->active = 0;
+        if (sparks[i].life <= 0)
+            sparks[i].active = 0;
     }
 }
 
-static void drawSparks(void) {
+static void drawSparks(void)
+{
     for (int i = 0; i < SPARK_COUNT; i++) {
-        Spark *s = &sparks[i];
-        if (!s->active) continue;
+        if (!sparks[i].active) continue;
 
-        float size = s->life > 7 ? 4.0f : 2.0f;
-        rect(s->x-cameraX, s->y, size, size, s->color);
+        float size = sparks[i].life > 8 ? 3.0f : 2.0f;
+
+        rect(
+            sparks[i].x - cameraX,
+            sparks[i].y,
+            size,
+            size,
+            sparks[i].color
+        );
     }
 }
 
-/* =========================================================
-   CENARIO
-   ========================================================= */
-
-static void platform(float x, float y, float w) {
-    wr(x, y, w, 4, WHITE);
-    wr(x+3, y+4, w-6, 2, BLACK);
-
-    for (float i = 9; i < w-5; i += 21)
-        wr(x+i, y+1, 2, 3, BLACK);
-}
-
-static void stalactite(float x, float width, float length) {
-    wr(x, 0, width, 5, WHITE);
-    wr(x+width*.25f, 5, width*.5f, length*.55f, WHITE);
-    wr(x+width*.4f, length*.55f,
-       width*.2f, length*.45f, WHITE);
-}
-
-static void crack(float x, float y) {
-    wr(x, y, 14, 2, WHITE);
-    wr(x+5, y+2, 2, 7, WHITE);
-    wr(x+5, y+9, 9, 2, WHITE);
-    wr(x+12, y+11, 2, 5, WHITE);
-}
-
-static void crystalDecoration(float x, float y) {
-    wr(x+5, y, 5, 5, WHITE);
-    wr(x+2, y+5, 11, 6, WHITE);
-    wr(x, y+11, 15, 5, WHITE);
-    wr(x+4, y+16, 7, 4, WHITE);
-    wr(x+6, y+5, 2, 7, BLACK);
-}
-
-static void caveRoom(int r) {
-    float s = r * 800.0f;
-
-    stalactite(s+15,54,30);
-    stalactite(s+105,35,19);
-    stalactite(s+210,60,43);
-    stalactite(s+335,42,24);
-    stalactite(s+460,65,36);
-    stalactite(s+610,45,27);
-    stalactite(s+730,52,33);
-
-    crack(s+90,76);
-    crack(s+280,104);
-    crack(s+510,70);
-    crack(s+675,95);
-
-    crystalDecoration(s+170,204);
-    crystalDecoration(s+560,190);
-
-    platform(s,238,120);
-    platform(s+145,238,105);
-    platform(s+275,238,165);
-    platform(s+470,238,115);
-    platform(s+620,238,180);
-
-    platform(s+65,197,47);
-    platform(s+150,166,43);
-    platform(s+245,192,40);
-    platform(s+330,151,52);
-    platform(s+430,185,42);
-    platform(s+535,160,46);
-    platform(s+650,129,55);
-    platform(s+740,177,40);
-
-    wr(s+126,232,5,6,WHITE);
-    wr(s+132,226,5,12,WHITE);
-    wr(s+138,232,5,6,WHITE);
-    wr(s+442,232,5,6,WHITE);
-    wr(s+448,226,5,12,WHITE);
-    wr(s+454,232,5,6,WHITE);
-
-    wr(s+390,48,50,4,WHITE);
-    wr(s+390,52,4,24,WHITE);
-    wr(s+436,52,4,24,WHITE);
-}
-
-/* Corredor que conecta as cavernas a uma nova zona. */
-static void drawTransitionCorridor(void) {
-    stalactite(1630,24,24);
-    stalactite(1740,30,30);
-    stalactite(1850,20,20);
-
-    crack(1660,95);
-    crack(1810,80);
-
-    platform(1600,238,320);
-    platform(1665,197,47);
-    platform(1750,166,43);
-    platform(1845,192,40);
-
-    /* Arco da entrada. O centro fica livre para atravessar. */
-    wr(1892,105,7,133,DARK_GRAY);
-    wr(1899,105,4,133,GRAY);
-    wr(1887,101,22,5,WHITE);
-    wr(1903,111,3,23,WHITE);
-    wr(1903,151,3,23,WHITE);
-    wr(1903,191,3,23,WHITE);
-
-    if (bossEncounterStarted) {
-        /* Marca visual de que a passagem foi atravessada. */
-        wr(1894,112,3,115,DARK_GRAY);
-        wr(1900,112,2,115,DARK_GRAY);
-    }
-}
-
-/*
-   NOVA ZONA: SANTUARIO DO HOLLOW GUARD.
-   O cenário muda depois da entrada em BOSS_START.
-   A arena tem paredes visuais, colunas e uma saída bloqueada.
-*/
-static void drawBossRoom(void) {
-    wr(BOSS_START,15,480,5,GRAY);
-    wr(BOSS_START,20,480,3,DARK_GRAY);
-
-    /* Fundo mais pesado para diferenciar a sala da caverna. */
-    wr(BOSS_START,23,480,212,BLACK);
-
-    for (int i = 0; i < 4; i++) {
-        float x = 1960 + i*125;
-
-        wr(x,38,24,100,DARK_GRAY);
-        wr(x+5,38,14,100,GRAY);
-        wr(x-4,38,32,5,WHITE);
-        wr(x-2,138,28,5,GRAY);
-        wr(x+8,55,3,19,BLACK);
-        wr(x+8,78,3,15,WHITE);
-    }
-
-    /* Marcas antigas nas paredes da arena. */
-    for (int i = 0; i < 5; i++) {
-        float x = 1980 + i*88;
-        wr(x,155,18,2,GRAY);
-        wr(x+8,157,2,12,WHITE);
-        wr(x+8,169,10,2,GRAY);
-    }
-
-    /* Altar quebrado no fundo da sala. */
-    wr(2110,205,100,8,DARK_GRAY);
-    wr(2120,193,80,12,GRAY);
-    wr(2130,183,60,10,WHITE);
-    wr(2140,173,40,10,GRAY);
-    wr(2145,177,5,5,WHITE);
-    wr(2155,177,5,5,BLACK);
-    wr(2165,177,5,5,WHITE);
-
-    /* Chao e plataformas exclusivos da arena. */
-    platform(BOSS_START,238,480);
-    platform(2030,185,42);
-    platform(2135,160,46);
-    platform(2250,129,55);
-
-    /* Colunas que emolduram a entrada, sem bloquear a passagem. */
-    wr(1920,105,5,133,DARK_GRAY);
-    wr(1925,105,4,133,GRAY);
-    wr(1920,100,23,5,WHITE);
-
-    /* Portao de saida, abre depois da derrota do chefe. */
-    if (bossDefeated) {
-        wr(2360,185,5,53,WHITE);
-        wr(2368,175,5,63,GRAY);
-        wr(2376,185,5,53,WHITE);
-        wr(2358,180,24,3,LIGHT_BLUE);
-    } else {
-        wr(2360,185,5,53,DARK_GRAY);
-        wr(2368,175,5,63,GRAY);
-        wr(2376,185,5,53,DARK_GRAY);
-    }
-}
-
-static void drawCave(void) {
-    caveRoom(0);
-    caveRoom(1);
-    drawTransitionCorridor();
-    drawBossRoom();
-
-    wr(790,200,20,38,BLACK);
-    wr(1590,200,20,38,BLACK);
-
-    wr(0,0,5,238,WHITE);
-    wr(WORLD_W-5,0,5,238,WHITE);
-}
-
-/* =========================================================
-   JOGADOR
-   ========================================================= */
-
-static void drawPlayer(void) {
-    float x = px-cameraX;
-    float y = py;
-    int step = playerMoving ? ((frame/5)%4) : 0;
-
-    int rising = (!grounded && pvy < -1.0f);
-    int falling = (!grounded && pvy > 1.0f);
-
-    rect(x+3,y,12,3,GRAY);
-    rect(x+2,y+2,14,3,WHITE);
-    rect(x+3,y+4,12,6,WHITE);
-    rect(x+4,y+6,10,3,BLACK);
-    rect(x+(swordFacing>0?11:5),y+6,2,2,WHITE);
-
-    rect(x+7,y+9,5,2,GRAY);
-    rect(x+3,y+11,12,9,WHITE);
-    rect(x+5,y+12,8,7,BLACK);
-    rect(x+7,y+13,4,4,GRAY);
-
-    if (!grounded) {
-        if (rising) {
-            rect(x-1,y+8,5,8,WHITE);
-            rect(x+14,y+8,5,8,WHITE);
-        } else if (falling) {
-            rect(x,y+12,4,8,WHITE);
-            rect(x+14,y+12,4,8,WHITE);
-        } else {
-            rect(x,y+10,4,7,WHITE);
-            rect(x+14,y+10,4,7,WHITE);
-        }
-
-        if (rising) {
-            rect(x+3,y+21,6,4,WHITE);
-            rect(x+10,y+21,6,4,WHITE);
-            rect(x+1,y+24,6,3,GRAY);
-            rect(x+12,y+24,5,3,GRAY);
-        } else if (falling) {
-            rect(x+4,y+21,5,7,WHITE);
-            rect(x+10,y+21,5,7,WHITE);
-            rect(x+2,y+28,6,2,GRAY);
-            rect(x+10,y+28,6,2,GRAY);
-        } else {
-            rect(x+2,y+21,6,5,WHITE);
-            rect(x+10,y+21,6,5,WHITE);
-            rect(x+1,y+26,6,3,GRAY);
-            rect(x+12,y+26,5,3,GRAY);
-        }
-    } else {
-        rect(x+(step==1?1:0),y+12,4,7,WHITE);
-        rect(x+14,y+(step==1?14:(step==2?10:12)),4,7,WHITE);
-
-        rect(x+3,y+21,5,7,WHITE);
-        rect(x+10,y+21,5,7,WHITE);
-        rect(x+2,y+28,6,2,GRAY);
-        rect(x+10,y+28,6,2,GRAY);
-    }
-
-    rect(x+3,y+19,12,2,GRAY);
-}
-
-/* =========================================================
-   VIDA DO JOGADOR
-   ========================================================= */
-
-static void drawPlayerHealth(void) {
-    text(8,25,"HP",WHITE);
-
-    for (int i = 0; i < PLAYER_MAX_HP; i++) {
-        int x = 34 + i*18;
-        rect(x,25,14,9,DARK_GRAY);
-
-        if (i < playerHP)
-            rect(x+2,27,10,5,WHITE);
-    }
-}
-
-static void playerTakeDamage(void) {
-    if (playerDamageCooldown > 0 || playerHP <= 0)
-        return;
-
-    playerHP--;
-    spawnPlayerSparks();
-    playerDamageCooldown = 60;
-
-    pvy = -4.2f;
-    grounded = 0;
-    jumps = 0;
-    jumpCut = 0;
-
-    if (playerHP <= 0) {
-        playerHP = 0;
-        state = 0;
-    }
-}
-
-/* =========================================================
-   INIMIGOS
-   ========================================================= */
-
-static void drawEnemies(void) {
-    for (int i = 0; i < ENEMY_COUNT; i++) {
-        Enemy *e = &enemies[i];
-        if (!e->active) continue;
-
-        float x = e->x-cameraX;
-        float y = e->y;
-
-        rect(x+7,y,5,4,WHITE);
-        rect(x+3,y+4,13,5,WHITE);
-        rect(x,y+9,18,5,WHITE);
-        rect(x+3,y+14,12,4,WHITE);
-        rect(x+6,y+7,3,3,BLACK);
-        rect(x+11,y+7,3,3,BLACK);
-        rect(x+1,y+9,2,4,BLACK);
-        rect(x+15,y+9,2,4,BLACK);
-    }
-}
-
-static void updateEnemies(void) {
-    for (int i = 0; i < ENEMY_COUNT; i++) {
-        Enemy *e = &enemies[i];
-        if (!e->active) continue;
-
-        e->phase += 0.045f;
-        e->y = e->baseY + sinf(e->phase)*10.0f;
-
-        float dx = px-e->x;
-
-        if (fabsf(dx) < 150) {
-            if (dx > 4) e->x += 0.25f;
-            else if (dx < -4) e->x -= 0.25f;
-        }
-
-        /* Inimigos comuns nao entram no santuario do chefe. */
-        if (e->x+e->w > BOSS_START-10)
-            e->x = BOSS_START-e->w-10;
-
-        if (overlap(px,py,PW,PH,e->x,e->y,e->w,e->h)) {
-            playerTakeDamage();
-
-            if (playerHP > 0) {
-                px = 35;
-                py = 190;
-                pvy = 0;
-                grounded = 0;
-                jumps = 0;
-                jumpCut = 0;
-                playerMoving = 0;
-            }
-        }
-    }
-}
-
-/* =========================================================
-   CRISTAL E MAGIA
-   ========================================================= */
-
-static void drawMagicPickup(void) {
-    if (magicUnlocked) return;
-
-    float x = 150-cameraX;
-    float y = 151;
-
-    rect(x+4,y-3,9,4,DARK_GRAY);
-    rect(x+6,y,5,5,LIGHT_BLUE);
-    rect(x+3,y+5,11,7,BLUE);
-    rect(x,y+10,17,5,BLUE);
-    rect(x+4,y+15,9,5,DARK_GRAY);
-    rect(x+7,y+3,3,10,LIGHT_BLUE);
-
-    if ((frame/8)%2) {
-        rect(x-4,y+7,3,3,LIGHT_BLUE);
-        rect(x+18,y+4,3,3,LIGHT_BLUE);
-        rect(x+8,y-7,3,3,LIGHT_BLUE);
-    }
-}
-
-static int nearestEnemy(float x, float y) {
-    int result = -1;
-    float best = 9999999.0f;
-
-    for (int i = 0; i < ENEMY_COUNT; i++) {
-        if (!enemies[i].active) continue;
-
-        float dx = enemies[i].x+enemies[i].w*.5f-x;
-        float dy = enemies[i].y+enemies[i].h*.5f-y;
-        float d = dx*dx+dy*dy;
-
-        if (d < best) {
-            best = d;
-            result = i;
-        }
-    }
-
-    /* O chefe so pode ser alvo depois de entrar na arena. */
-    if (boss.active && bossEncounterStarted) {
-        float dx = boss.x+18-x;
-        float dy = boss.y+22-y;
-        float d = dx*dx+dy*dy;
-
-        if (d < best)
-            result = ENEMY_COUNT;
-    }
-
-    return result;
-}
-
-static void fireMagic(void) {
-    int target = nearestEnemy(px+PW*.5f,py+PH*.5f);
-    if (target < 0) return;
-
-    for (int i = 0; i < SHOT_COUNT; i++) {
-        if (shots[i].active) continue;
-
-        shots[i].x = px+PW*.5f;
-        shots[i].y = py+PH*.5f;
-
-        if (target == ENEMY_COUNT) {
-            shots[i].vx = (boss.x > px) ? 3.5f : -3.5f;
-        } else {
-            shots[i].vx = 3.5f*swordFacing;
-        }
-
-        shots[i].vy = 0;
-        shots[i].target = target;
-        shots[i].active = 1;
-        magicCooldown = 45;
-        return;
-    }
-}
-
-static void updateShots(void) {
-    for (int i = 0; i < SHOT_COUNT; i++) {
-        Shot *s = &shots[i];
-        if (!s->active) continue;
-
-        int valid = 0;
-
-        if (s->target >= 0 && s->target < ENEMY_COUNT)
-            valid = enemies[s->target].active;
-        else if (s->target == ENEMY_COUNT)
-            valid = boss.active && bossEncounterStarted;
-
-        if (!valid) {
-            s->target = nearestEnemy(s->x,s->y);
-
-            if (s->target < 0) {
-                s->active = 0;
-                continue;
-            }
-        }
-
-        float tx, ty;
-
-        if (s->target == ENEMY_COUNT) {
-            tx = boss.x+18;
-            ty = boss.y+22;
-        } else {
-            Enemy *e = &enemies[s->target];
-            tx = e->x+e->w*.5f;
-            ty = e->y+e->h*.5f;
-        }
-
-        float dx = tx-s->x;
-        float dy = ty-s->y;
-        float d = sqrtf(dx*dx+dy*dy);
-
-        if (d < 12) {
-            if (s->target == ENEMY_COUNT) {
-                if (boss.active && bossEncounterStarted &&
-                    boss.damageCooldown == 0) {
-                    boss.hp--;
-                    boss.damageCooldown = 12;
-                    spawnBossSparks();
-
-                    if (boss.hp <= 0) {
-                        boss.hp = 0;
-                        boss.active = 0;
-                        bossDefeated = 1;
-                    }
-                }
-            } else {
-                Enemy *e = &enemies[s->target];
-                e->hp--;
-
-                if (e->hp <= 0)
-                    e->active = 0;
-            }
-
-            s->active = 0;
-            continue;
-        }
-
-        if (d > 0.01f) {
-            float vx = dx/d*4.8f;
-            float vy = dy/d*4.8f;
-
-            s->vx += (vx-s->vx)*0.18f;
-            s->vy += (vy-s->vy)*0.18f;
-        }
-
-        s->x += s->vx;
-        s->y += s->vy;
-
-        if (s->x < 0 || s->x > WORLD_W ||
-            s->y < -10 || s->y > SH+20)
-            s->active = 0;
-    }
-}
-
-static void drawShots(void) {
-    for (int i = 0; i < SHOT_COUNT; i++) {
-        Shot *s = &shots[i];
-        if (!s->active) continue;
-
-        float x = s->x-cameraX;
-        float y = s->y;
-
-        rect(x-s->vx*2,y-s->vy*2,12,6,DARK_GRAY);
-        rect(x-4,y-4,9,9,BLUE);
-        rect(x-1,y-1,3,3,LIGHT_BLUE);
-    }
-}
-
-/* =========================================================
-   ESPADA E MEIA-LUA ANIMADA
-   ========================================================= */
-
-static void attackSword(void) {
-    if (swordCooldown > 0) return;
-
-    swordCooldown = 20;
-    swordTimer = 10;
+static void initGame(void)
+{
+    memset(&player, 0, sizeof(player));
+    memset(&boss, 0, sizeof(boss));
+    memset(shots, 0, sizeof(shots));
+    memset(sparks, 0, sizeof(sparks));
+
+    player.x = 70;
+    player.y = 170;
+    player.hp = PLAYER_MAX_HP;
+    player.facing = 1;
+
+    boss.x = BOSS_START + 270;
+    boss.y = 190;
+    boss.hp = BOSS_MAX_HP;
+    boss.active = 1;
+
+    cameraX = 0;
+    bossStarted = 0;
+    bossDefeated = 0;
+    frameCount = 0;
     swordHitDone = 0;
+    bossHitFlash = 0;
 }
 
-static void applySwordDamage(void) {
-    if (swordHitDone || swordTimer < 4) return;
+static float floorAt(float x)
+{
+    if (x < 1600.0f) return 232.0f;
+    if (x < BOSS_START) return 232.0f;
+    return 232.0f;
+}
 
-    swordHitDone = 1;
+static void drawCaveRoom(float start, float end, int arena)
+{
+    unsigned int wall = arena ? 0xFF30273A : ROCK;
+    unsigned int trim = arena ? 0xFF51405C : ROCK_LIGHT;
 
-    float ax = (swordFacing > 0) ? px+PW : px-34;
-    float ay = py+3;
+    rect(start - cameraX, 0, end - start, SH, DARK);
 
-    for (int i = 0; i < ENEMY_COUNT; i++) {
-        Enemy *e = &enemies[i];
-        if (!e->active) continue;
+    for (int i = 0; i < 12; i++) {
+        float rx = start + i * ((end - start) / 12.0f);
+        float rw = (end - start) / 12.0f;
 
-        if (overlap(ax,ay,34,28,e->x,e->y,e->w,e->h)) {
-            e->hp--;
+        rect(rx - cameraX, 0, rw, 12 + (i % 3) * 6, wall);
 
-            if (e->hp <= 0)
-                e->active = 0;
-        }
+        float ceilingY = 18 + (i % 4) * 5;
+        rect(rx - cameraX, ceilingY, rw * 0.55f, 3, trim);
+
+        if (i % 2 == 0)
+            rect(rx - cameraX + 8, 70 + (i % 3) * 12,
+                 20, 4, wall);
     }
 
-    if (boss.active && bossEncounterStarted &&
-        boss.damageCooldown == 0 &&
-        overlap(ax,ay,34,28,boss.x,boss.y,40,44)) {
-        boss.hp--;
-        boss.damageCooldown = 12;
-        spawnBossSparks();
+    rect(start - cameraX, 232, end - start, 40, wall);
+    rect(start - cameraX, 232, end - start, 4, trim);
 
-        if (boss.hp <= 0) {
-            boss.hp = 0;
-            boss.active = 0;
-            bossDefeated = 1;
+    for (int i = 0; i < 18; i++) {
+        float rx = start + i * ((end - start) / 18.0f);
+        rect(rx - cameraX, 244 + (i % 3) * 7,
+             16, 3, DARK);
+    }
+
+    if (arena) {
+        rect(start - cameraX + 10, 35, 4, 190, PURPLE);
+        rect(end - cameraX - 14, 35, 4, 190, PURPLE);
+
+        for (int i = 0; i < 5; i++) {
+            rect(start - cameraX + 10, 45 + i * 35,
+                 4, 12, LIGHT_BLUE);
+            rect(end - cameraX - 14, 45 + i * 35,
+                 4, 12, LIGHT_BLUE);
         }
     }
 }
 
-/*
-   A meia-lua se move a cada quadro.
-   Os blocos seguem um arco que avanca durante o golpe.
-   A direcao e espelhada quando o jogador olha para a esquerda.
-*/
-static void drawSword(void) {
-    if (swordTimer <= 0) return;
+static void drawWorld(void)
+{
+    rect(0, 0, SW, SH, DARK);
 
-    float x = px-cameraX;
-    float y = py+15.0f;
+    drawCaveRoom(0, 1600, 0);
 
-    float progress = (10.0f-(float)swordTimer)/9.0f;
+    /* Corredor que liga a caverna à arena do miniboss. */
+    rect(1600 - cameraX, 0, 320, SH, 0xFF211C2A);
+    rect(1600 - cameraX, 232, 320, 40, ROCK);
+    rect(1600 - cameraX, 232, 320, 4, ROCK_LIGHT);
+
+    for (int i = 0; i < 8; i++) {
+        float x = 1620 + i * 38;
+        rect(x - cameraX, 40 + (i % 3) * 12,
+             18, 4, ROCK_LIGHT);
+    }
+
+    /* Portal de entrada da arena. */
+    rect(1888 - cameraX, 90, 8, 142, PURPLE);
+    rect(1896 - cameraX, 100, 3, 122, LIGHT_BLUE);
+
+    drawCaveRoom(BOSS_START, BOSS_END, 1);
+
+    if (!bossDefeated) {
+        rect(BOSS_END - cameraX - 28, 175, 16, 57, ROCK_LIGHT);
+    } else {
+        rect(BOSS_END - cameraX - 28, 175, 16, 57, GOLD);
+        rect(BOSS_END - cameraX - 24, 180, 8, 47, LIGHT_BLUE);
+    }
+
+    /* Cristal mágico inicial. */
+    if (!player.magicUnlocked) {
+        float crystalY = 192 + sinf(frameCount * 0.08f) * 5.0f;
+        float crystalX = 150 - cameraX;
+
+        rect(crystalX - 5, crystalY - 8, 10, 16, BLUE);
+        rect(crystalX - 2, crystalY - 5, 4, 10, LIGHT_BLUE);
+    }
+}
+
+static void drawPlayer(void)
+{
+    float x = player.x - cameraX;
+    float y = player.y;
+
+    if (player.invulnerable > 0 && (frameCount / 4) % 2 == 0)
+        return;
+
+    /* Pernas. */
+    rect(x + 3, y + 21, 5, 9, 0xFF39324D);
+    rect(x + 10, y + 21, 5, 9, 0xFF39324D);
+
+    /* Corpo e cabeça. */
+    rect(x + 2, y + 9, 14, 14, 0xFF25213D);
+    rect(x + 4, y, 11, 11, 0xFFB7A7C6);
+
+    /* Olhos. */
+    rect(x + (player.facing > 0 ? 11 : 5), y + 4,
+         3, 2, LIGHT_BLUE);
+
+    /* Pequeno brilho mágico depois de pegar o cristal. */
+    if (player.magicUnlocked) {
+        rect(x - 2, y + 13, 3, 3, BLUE);
+    }
+}
+
+static void drawSword(float x, float y, int facing)
+{
+    if (player.attackTimer <= 0)
+        return;
+
+    float progress = 1.0f - (float)player.attackTimer / 14.0f;
 
     if (progress < 0.0f) progress = 0.0f;
     if (progress > 1.0f) progress = 1.0f;
 
-    /* Punho e lamina principal mudam de lado com a direcao. */
-    if (swordFacing > 0) {
-        rect(x+12,y-3,7,4,DARK_GRAY);
-        rect(x+17,y-6,5,4,GRAY);
-    } else {
-        rect(x-1,y-3,7,4,DARK_GRAY);
-        rect(x-4,y-6,5,4,GRAY);
-    }
+    float centerX = x + PW * 0.5f + facing * 8.0f;
+    float centerY = y + PH * 0.45f;
+    float radius = 25.0f;
+
+    float startAngle = facing > 0 ? -1.45f : 4.59f;
+    float endAngle   = facing > 0 ?  1.45f : 1.69f;
 
     /*
-       A meia-lua percorre o arco em vez de ficar parada.
-       A distancia varia para dar sensacao de impulso.
+       A meia-lua é desenhada com pequenos segmentos.
+       O trecho mais brilhante acompanha a animação do golpe.
     */
-    for (int i = 0; i < 9; i++) {
-        float part = (float)i/8.0f;
-        float angle = -1.45f + part*2.90f;
-        float sweep = progress*2.20f-0.55f;
+    for (int i = 0; i < 22; i++) {
+        float t = (float)i / 21.0f;
+        float angle = startAngle + (endAngle - startAngle) * t;
 
-        angle += sweep;
+        float sx = centerX + cosf(angle) * radius;
+        float sy = centerY + sinf(angle) * radius;
 
-        float radius = 22.0f + sinf(progress*3.14159265f)*10.0f;
-        float side = (float)swordFacing;
+        float distance = fabsf(t - progress);
+        float brightness = 1.0f - distance * 1.6f;
 
-        float sx = x+PW*0.5f + cosf(angle)*radius*side;
-        float sy = y + sinf(angle)*radius;
+        if (brightness < 0.15f)
+            brightness = 0.15f;
 
-        float size = (i%3 == 0) ? 5.0f : 4.0f;
+        float size = 2.0f + brightness * 3.0f;
 
-        if (i < 3 || i > 6)
-            rect(sx-2.0f,sy-2.0f,size,size,GRAY);
-        else
-            rect(sx-2.0f,sy-2.0f,size,size,WHITE);
+        rect(sx - size * 0.5f, sy - size * 0.5f,
+             size, size, LIGHT_BLUE);
 
-        /* Brilho azul acompanha a ponta do arco. */
-        if (i == 4 || i == 5 || i == 6) {
-            rect(sx,sy-3.0f,3,3,LIGHT_BLUE);
+        if (i % 2 == 0) {
+            rect(sx - cameraX * 0.0f - 1,
+                 sy - 1, 2, 2, WHITE);
         }
     }
 
-    /* Ponta brilhante em movimento. */
-    {
-        float angle = -1.45f + progress*2.90f;
-        float radius = 30.0f + sinf(progress*3.14159265f)*10.0f;
-        float sx = x+PW*0.5f +
-                   cosf(angle)*radius*(float)swordFacing;
-        float sy = y+sin
-f(angle)*radius;
-
-        rect(sx-2,sy-2,5,5,LIGHT_BLUE);
-        rect(sx,sy,2,2,WHITE);
-    }
+    rect(centerX - 2, centerY - 2, 4, 4, BLUE);
 }
 
-/* =========================================================
-   MINI-CHEFE: HOLLOW GUARD
-   ========================================================= */
+static void drawBoss(void)
+{
+    if (!boss.active) return;
 
-static void drawMiniBoss(void) {
-    if (!boss.active || !bossEncounterStarted)
-        return;
-
-    float x = boss.x-cameraX;
+    float x = boss.x - cameraX;
     float y = boss.y;
+    unsigned int body = bossHitFlash > 0 ? WHITE : 0xFF29243A;
 
-    rect(x-5,y+41,46,3,BLACK);
-    rect(x+4,y-5,6,8,WHITE);
-    rect(x+26,y-5,6,8,WHITE);
+    /* Pés e corpo. */
+    rect(x + 5, y + 31, 10, 12, DARK);
+    rect(x + 24, y + 31, 10, 12, DARK);
+    rect(x + 2, y + 8, 35, 28, body);
 
-    rect(x+5,y+2,26,12,GRAY);
-    rect(x+2,y+7,32,8,WHITE);
-    rect(x+8,y+8,6,4,BLACK);
-    rect(x+22,y+8,6,4,BLACK);
-    rect(x+10,y+9,3,2,WHITE);
-    rect(x+24,y+9,3,2,WHITE);
+    /* Cabeça e chifres. */
+    rect(x + 7, y, 25, 15, 0xFF65536B);
+    rect(x + 5, y - 5, 7, 9, ROCK_LIGHT);
+    rect(x + 28, y - 5, 7, 9, ROCK_LIGHT);
 
-    rect(x+6,y+15,24,17,WHITE);
-    rect(x+10,y+18,16,10,DARK_GRAY);
+    /* Olhos. */
+    rect(x + 10, y + 5, 5, 4, RED);
+    rect(x + 24, y + 5, 5, 4, RED);
 
-    rect(x-3,y+15,9,17,GRAY);
-    rect(x+30,y+15,9,17,GRAY);
-    rect(x-5,y+28,11,10,WHITE);
-    rect(x+29,y+28,11,10,WHITE);
+    /* Braço e arma. */
+    rect(x + 30, y + 16, 12, 8, 0xFF65536B);
+    rect(x + 39, y + 12, 5, 22, SILVER);
 
-    if (!boss.grounded) {
-        rect(x+2,y+34,10,7,WHITE);
-        rect(x+25,y+34,10,7,WHITE);
-        rect(x-2,y+40,12,3,GRAY);
-        rect(x+27,y+40,12,3,GRAY);
-    } else {
-        rect(x+7,y+32,9,10,GRAY);
-        rect(x+20,y+32,9,10,GRAY);
-    }
+    /* Barra de vida do miniboss. */
+    rect(135, 14, 210, 9, 0xFF181818);
+    rect(137, 16, 206, 5, DARK);
 
-    rect(x+17,y+17,3,4,BLACK);
-    rect(x+14,y+21,3,5,BLACK);
-    rect(x+17,y+26,5,2,BLACK);
+    float hpWidth = 206.0f * boss.hp / BOSS_MAX_HP;
+    if (hpWidth < 0) hpWidth = 0;
 
-    if (boss.attack == 1) {
-        rect(x-9,y+17,5,18,WHITE);
-        rect(x+39,y+17,5,18,WHITE);
-        rect(x+5,y-9,26,3,GRAY);
-    } else if (boss.attack == 2) {
-        rect(x-8,y+18,7,16,WHITE);
-        rect(x+37,y+18,7,16,WHITE);
-        rect(x+2,y+14,32,5,GRAY);
+    rect(137, 16, hpWidth, 5, RED);
+}
+
+static void castMagic(void)
+{
+    if (!player.magicUnlocked || player.magicCooldown > 0)
+        return;
+
+    for (int i = 0; i < SHOT_COUNT; i++) {
+        if (!shots[i].active) {
+            shots[i].x = player.x + PW * 0.5f;
+            shots[i].y = player.y + PH * 0.45f;
+            shots[i].vx = player.facing * 4.0f;
+            shots[i].vy = -0.4f;
+            shots[i].life = 120;
+            shots[i].active = 1;
+            player.magicCooldown = 25;
+            break;
+        }
     }
 }
 
-static void updateMiniBoss(void) {
-    /* O chefe fica inativo ate o jogador atravessar a entrada. */
-    if (!boss.active || bossDefeated ||
-        !bossEncounterStarted)
-        return;
+static void updateShots(void)
+{
+    for (int i = 0; i < SHOT_COUNT; i++) {
+        Shot *s = &shots[i];
 
-    if (boss.contactCooldown > 0)
-        boss.contactCooldown--;
+        if (!s->active) continue;
+
+        s->life--;
+        if (s->life <= 0) {
+            s->active = 0;
+            continue;
+        }
+
+        if (boss.active && bossStarted) {
+            float dx = boss.x + 18 - s->x;
+            float dy = boss.y + 20 - s->y;
+            float length = sqrtf(dx * dx + dy * dy);
+
+            if (length > 1.0f) {
+                s->vx += (dx / length) * 0.13f;
+                s->vy += (dy / length) * 0.13f;
+            }
+
+            float speed = sqrtf(s->vx * s->vx + s->vy * s->vy);
+            if (speed > 5.0f) {
+                s->vx *= 5.0f / speed;
+                s->vy *= 5.0f / speed;
+            }
+        }
+
+        s->x += s->vx;
+        s->y += s->vy;
+
+        if (boss.active && bossStarted && boss.damageCooldown <= 0) {
+            if (s->x > boss.x && s->x < boss.x + 42 &&
+                s->y > boss.y && s->y < boss.y + 44) {
+                boss.hp--;
+                boss.damageCooldown = 12;
+                bossHitFlash = 4;
+
+                spawnSparks(s->x, s->y, SILVER, 8);
+                spawnSparks(s->x, s->y, WHITE, 4);
+
+                s->active = 0;
+
+                if (boss.hp <= 0) {
+                    boss.hp = 0;
+                    boss.active = 0;
+                    bossDefeated = 1;
+                }
+            }
+        }
+
+        if (s->x < 0 || s->x > WORLD_W)
+            s->active = 0;
+    }
+}
+
+static void drawShots(void)
+{
+    for (int i = 0; i < SHOT_COUNT; i++) {
+        if (!shots[i].active) continue;
+
+        float x = shots[i].x - cameraX;
+        float y = shots[i].y;
+
+        circle(x, y, 5, BLUE);
+        rect(x - 2, y - 2, 4, 4, LIGHT_BLUE);
+    }
+}
+
+static void updateBoss(void)
+{
+    if (!boss.active || !bossStarted) return;
 
     if (boss.damageCooldown > 0)
         boss.damageCooldown--;
 
-    boss.timer++;
+    if (bossHitFlash > 0)
+        bossHitFlash--;
 
-    float dx = px-boss.x;
+    float dx = player.x - boss.x;
 
-    if (boss.attack == 0) {
-        if (dx > 5) boss.x += 0.65f;
-        else if (dx < -5) boss.x -= 0.65f;
+    if (fabsf(dx) > 38) {
+        boss.vx = dx > 0 ? 1.0f : -1.0f;
+    } else {
+        boss.vx = 0;
 
-        if (boss.x < 1945) boss.x = 1945;
-        if (boss.x > 2320) boss.x = 2320;
-
-        if (boss.timer >= 75 && fabsf(dx) < 360) {
-            boss.attack = 1;
-            boss.timer = 0;
-            boss.vx = 0;
-        }
-    } else if (boss.attack == 1) {
-        if (boss.timer >= 22) {
-            boss.attack = 2;
-            boss.timer = 0;
-            boss.grounded = 0;
-            boss.vy = -8.0f;
-            boss.vx = (px < boss.x) ? -2.4f : 2.4f;
-        }
-    } else if (boss.attack == 2) {
-        boss.x += boss.vx;
-        boss.vy += 0.32f;
-
-        if (boss.vy > 7.0f)
-            boss.vy = 7.0f;
-
-        boss.y += boss.vy;
-
-        if (boss.x < 1940) {
-            boss.x = 1940;
-            boss.vx = 1.0f;
-        }
-
-        if (boss.x > 2340) {
-            boss.x = 2340;
-            boss.vx = -1.0f;
-        }
-
-        if (boss.y+44 >= 238 && boss.vy >= 0) {
-            boss.y = 194;
-            boss.vy = 0;
-            boss.grounded = 1;
-            boss.attack = 3;
-            boss.timer = 0;
-        }
-    } else if (boss.attack == 3) {
-        if (boss.timer >= 40) {
-            boss.attack = 0;
-            boss.timer = 0;
+        if (boss.attackTimer <= 0) {
+            boss.attackTimer = 55;
+            boss.vy = -5.2f;
         }
     }
 
-    if (overlap(px,py,PW,PH,boss.x,boss.y,40,44) &&
-        boss.contactCooldown == 0) {
-        playerTakeDamage();
+    boss.x += boss.vx;
+    boss.y += boss.vy;
 
-        if (px+PW*.5f < boss.x+20)
-            px = boss.x-PW-2;
-        else
-            px = boss.x+42;
+    boss.vy += 0.24f;
 
-        if (px < BOSS_START+5)
-            px = BOSS_START+5;
-
-        if (px > BOSS_END-PW-30)
-            px = BOSS_END-PW-30;
-
-        pvy = -4.2f;
-        grounded = 0;
-        jumps = 0;
-        jumpCut = 0;
-        playerMoving = 0;
-        boss.contactCooldown = 45;
-    }
-}
-
-/* =========================================================
-   HUD DO CHEFE
-   ========================================================= */
-
-static void drawBossHUD(void) {
-    if (!bossEncounterStarted || bossDefeated)
-        return;
-
-    rect(70,235,340,29,BLACK);
-    rect(70,235,340,2,DARK_GRAY);
-    text(78,240,"HOLLOW GUARD",WHITE);
-    rect(78,253,324,7,DARK_GRAY);
-
-    if (boss.hp > 0)
-        rect(80,255,320.0f*boss.hp/10.0f,3,WHITE);
-}
-
-/* =========================================================
-   COLISAO COM CHAO E PLATAFORMAS
-   ========================================================= */
-
-static void resolvePlatforms(float oldBottom) {
-    static const Rect floors[] = {
-        {0,238,120,34},
-        {145,238,105,34},
-        {275,238,165,34},
-        {470,238,115,34},
-        {620,238,180,34},
-
-        {800,238,120,34},
-        {945,238,105,34},
-        {1075,238,165,34},
-        {1270,238,115,34},
-        {1420,238,180,34},
-
-        {1600,238,320,34},
-        {1920,238,480,34}
-    };
-
-    static const Rect plats[] = {
-        {65,197,47,6},
-        {150,166,43,6},
-        {245,192,40,6},
-        {330,151,52,6},
-        {430,185,42,6},
-        {535,160,46,6},
-        {650,129,55,6},
-        {740,177,40,6},
-
-        {865,197,47,6},
-        {950,166,43,6},
-        {1045,192,40,6},
-        {1130,151,52,6},
-        {1230,185,42,6},
-        {1335,160,46,6},
-        {1450,129,55,6},
-        {1540,177,40,6},
-
-        {1665,197,47,6},
-        {1750,166,43,6},
-        {1845,192,40,6},
-
-        {2030,185,42,6},
-        {2135,160,46,6},
-        {2250,129,55,6}
-    };
-
-    for (int i = 0; i < (int)(sizeof(floors)/sizeof(floors[0])); i++) {
-        Rect f = floors[i];
-
-        if (pvy >= 0 && oldBottom <= f.y+2 &&
-            py+PH >= f.y && px+PW > f.x &&
-            px < f.x+f.w) {
-            py = f.y-PH;
-            pvy = 0;
-            grounded = 1;
-            jumps = 0;
-            jumpCut = 0;
-        }
+    if (boss.y >= 189) {
+        boss.y = 189;
+        boss.vy = 0;
+        boss.grounded = 1;
+    } else {
+        boss.grounded = 0;
     }
 
-    for (int i = 0; i < (int)(sizeof(plats)/sizeof(plats[0])); i++) {
-        Rect p = plats[i];
+    if (boss.attackTimer > 0)
+        boss.attackTimer--;
 
-        if (pvy >= 0 && oldBottom <= p.y+2 &&
-            py+PH >= p.y && px+PW > p.x &&
-            px < p.x+p.w) {
-            py = p.y-PH;
-            pvy = 0;
-            grounded = 1;
-            jumps = 0;
-            jumpCut = 0;
+    if (player.damageCooldown <= 0 &&
+        player.invulnerable <= 0 &&
+        player.x + PW > boss.x &&
+        player.x < boss.x + 42 &&
+        player.y + PH > boss.y &&
+        player.y < boss.y + 44) {
+
+        player.hp--;
+        player.damageCooldown = 60;
+        player.invulnerable = 60;
+        player.vy = -4.5f;
+        player.vx = player.x < boss.x ? -2.5f : 2.5f;
+
+        spawnSparks(player.x + PW * 0.5f,
+                    player.y + PH * 0.5f,
+                    BLUE, 12);
+
+        if (player.hp <= 0) {
+            player.hp = 0;
+            gameState = 3;
         }
     }
 }
 
-/* =========================================================
-   ATUALIZACAO DO JOGO
-   ========================================================= */
+static void updatePlayer(SceCtrlData *pad)
+{
+    unsigned int buttons = pad->Buttons;
 
-static void updateGame(SceCtrlData pad, unsigned int pressed) {
-    float vx = 0;
+    if (player.damageCooldown > 0)
+        player.damageCooldown--;
 
-    if (pad.Buttons & PSP_CTRL_LEFT) {
-        vx = -2.4f;
-        swordFacing = -1;
+    if (player.invulnerable > 0)
+        player.invulnerable--;
+
+    if (player.magicCooldown > 0)
+        player.magicCooldown--;
+
+    if (player.attackTimer > 0)
+        player.attackTimer--;
+
+    player.vx = 0;
+
+    if (buttons & PSP_CTRL_LEFT) {
+        player.vx = -2.4f;
+        player.facing = -1;
     }
 
-    if (pad.Buttons & PSP_CTRL_RIGHT) {
-        vx = 2.4f;
-        swordFacing = 1;
+    if (buttons & PSP_CTRL_RIGHT) {
+        player.vx = 2.4f;
+        player.facing = 1;
     }
 
-    playerMoving = (vx != 0 && grounded);
+    if (pressed(buttons, PSP_CTRL_CROSS)) {
+        if (player.grounded) {
+            player.vy = -8.2f;
+            player.grounded = 0;
+            player.jumps = 1;
+        } else if (player.jumps < 2) {
+            player.vy = -7.4f;
+            player.jumps = 2;
+            spawnSparks(player.x + PW * 0.5f,
+                        player.y + PH,
+                        LIGHT_BLUE, 5);
+        }
+    }
 
-    /* Movimento horizontal. */
-    px += vx;
+    /* Corte do pulo variável ao soltar X. */
+    if (!(buttons & PSP_CTRL_CROSS) && player.vy < -3.0f)
+        player.vy *= 0.86f;
 
-    if (px < 0)
-        px = 0;
+    if (pressed(buttons, PSP_CTRL_SQUARE)) {
+        player.attackTimer = 14;
+        swordHitDone = 0;
+    }
 
-    if (px > WORLD_W-PW)
-        px = WORLD_W-PW;
+    if (pressed(buttons, PSP_CTRL_CIRCLE))
+        castMagic();
+
+    player.vy += 0.27f;
+    if (player.vy > 7.0f)
+        player.vy = 7.0f;
+
+    player.x += player.vx;
+    player.y += player.vy;
+
+    if (player.x < 0)
+        player.x = 0;
+
+    if (player.x > WORLD_W - PW)
+        player.x = WORLD_W - PW;
+
+    float floorY = floorAt(player.x);
+
+    if (player.y + PH >= floorY) {
+        player.y = floorY - PH;
+        player.vy = 0;
+        player.grounded = 1;
+        player.jumps = 0;
+    } else {
+        player.grounded = 0;
+    }
+
+    /* Pegar o cristal de magia. */
+    if (!player.magicUnlocked &&
+        player.x + PW > 135 &&
+        player.x < 165 &&
+        player.y + PH > 165) {
+        player.magicUnlocked = 1;
+        spawnSparks(150, 190, BLUE, 18);
+    }
 
     /*
-       Salto melhorado:
-       primeiro salto mais alto, duplo salto forte,
-       gravidade mais suave e altura controlada ao soltar X.
+       A arena só começa quando o jogador atravessa a entrada.
+       Depois da entrada, o miniboss fica na sala separada.
     */
-    if ((pressed & PSP_CTRL_CROSS) && jumps < 2) {
-        if (jumps == 0)
-            pvy = -9.2f;
-        else
-            pvy = -8.3f;
-
-        grounded = 0;
-        jumps++;
-        jumpCut = 0;
+    if (player.x >= BOSS_START && !bossStarted && !bossDefeated) {
+        bossStarted = 1;
+        player.x = BOSS_START + 8;
     }
-
-    /* Soltar X durante a subida reduz a altura do salto. */
-    if (!(pad.Buttons & PSP_CTRL_CROSS) &&
-        pvy < -2.0f && !jumpCut) {
-        pvy *= 0.62f;
-        jumpCut = 1;
-    }
-
-    float oldBottom = py+PH;
-
-    pvy += 0.25f;
-
-    if (pvy > 6.8f)
-        pvy = 6.8f;
-
-    py += pvy;
-    grounded = 0;
-
-    resolvePlatforms(oldBottom);
-
-    /* Pegar o cristal azul. */
-    if (!magicUnlocked &&
-        overlap(px,py,PW,PH,145,151,22,22)) {
-        magicUnlocked = 1;
-    }
-
-    if (swordCooldown > 0)
-        swordCooldown--;
-
-    if (swordTimer > 0)
-        swordTimer--;
-
-    if (magicCooldown > 0)
-        magicCooldown--;
-
-    if (playerDamageCooldown > 0)
-        playerDamageCooldown--;
-
-    if (pressed & PSP_CTRL_SQUARE)
-        attackSword();
-
-    applySwordDamage();
-
-    if (magicUnlocked &&
-        (pressed & PSP_CTRL_CIRCLE) &&
-        magicCooldown == 0) {
-        fireMagic();
-    }
-
-    updateEnemies();
 
     /*
-       Entrada da nova zona.
-       O chefe so desperta quando o jogador cruza BOSS_START.
-       Depois de entrar, o jogador nao pode voltar ao corredor
-       enquanto o chefe estiver vivo.
+       Enquanto o miniboss estiver vivo, o jogador não sai da arena.
+       A entrada e a saída são separadas do corredor.
     */
-    if (px >= BOSS_START && !bossEncounterStarted) {
-        bossEncounterStarted = 1;
-        boss.timer = 0;
-        boss.attack = 0;
+    if (bossStarted && !bossDefeated) {
+        if (player.x < BOSS_START + 2)
+            player.x = BOSS_START + 2;
+
+        if (player.x > BOSS_END - PW - 4)
+            player.x = BOSS_END - PW - 4;
     }
 
-    updateMiniBoss();
-    updateShots();
-    updateSparks();
+    /* Golpe de espada contra o miniboss. */
+    if (player.attackTimer > 0 &&
+        !swordHitDone &&
+        boss.active &&
+        bossStarted &&
+        boss.damageCooldown <= 0) {
 
-    if (py > SH+60) {
-        playerTakeDamage();
+        float swordX = player.x + PW * 0.5f + player.facing * 24.0f;
+        float swordY = player.y + PH * 0.45f;
 
-        if (playerHP > 0) {
-            px = 35;
-            py = 190;
-            pvy = 0;
-            grounded = 0;
-            jumps = 0;
-            jumpCut = 0;
-            playerMoving = 0;
+        if (fabsf(swordX - (boss.x + 20)) < 34 &&
+            fabsf(swordY - (boss.y + 20)) < 28) {
+
+            boss.hp--;
+            boss.damageCooldown = 12;
+            bossHitFlash = 4;
+            swordHitDone = 1;
+
+            spawnSparks(boss.x + 20, boss.y + 20, SILVER, 9);
+            spawnSparks(boss.x + 20, boss.y + 20, WHITE, 4);
+
+            if (boss.hp <= 0) {
+                boss.hp = 0;
+                boss.active = 0;
+                bossDefeated = 1;
+            }
         }
     }
 
-    /* Arena fechada durante a luta. */
-    if (bossEncounterStarted && !bossDefeated) {
-        if (px < BOSS_START+5)
-            px = BOSS_START+5;
-
-        if (px > BOSS_END-PW-30)
-            px = BOSS_END-PW-30;
+    /* Saída liberada após derrotar o miniboss. */
+    if (bossDefeated && player.x >= WORLD_W - 50) {
+        gameState = 2;
     }
 
-    /* A saida so pode ser atravessada depois da vitoria. */
-    if (bossDefeated && px > BOSS_END-PW-25) {
-        state = 3;
-    }
-
-    cameraX = px-210;
+    /*
+       A câmera acompanha o jogador, mas permanece dentro do mundo.
+    */
+    cameraX = player.x - SW * 0.42f;
 
     if (cameraX < 0)
         cameraX = 0;
 
-    if (cameraX > WORLD_W-SW)
-        cameraX = WORLD_W-SW;
-
-    if (px < 800)
-        room = 0;
-    else if (px < CORRIDOR_START)
-        room = 1;
-    else if (px < BOSS_START)
-        room = 2;
-    else
-        room = 3;
+    if (cameraX > WORLD_W - SW)
+        cameraX = WORLD_W - SW;
 }
 
-/* =========================================================
-   MENUS
-   ========================================================= */
-
-static void drawMenu(void) {
-    rect(0,0,SW,SH,BLACK);
-    rect(65,45,350,3,WHITE);
-    rect(65,48,3,52,WHITE);
-    rect(412,48,3,52,WHITE);
-    rect(65,100,350,3,WHITE);
-
-    text(174,63,"RANDOM",WHITE);
-    text(132,124,"PRESS START",WHITE);
-    text(126,157,"FORGOTTEN CAVE",WHITE);
-
-    rect(120,215,240,3,WHITE);
-}
-
-static void drawIntro(void) {
-    rect(0,0,SW,SH,BLACK);
-    text(174,32,"RANDOM",WHITE);
-
-    if (introPage == 0) {
-        text(66,85,"WHERE AM I",WHITE);
-        text(60,126,"FIND THE SWORD",WHITE);
-    } else {
-        text(54,82,"FOLLOW BLUE LIGHT",WHITE);
-        text(60,126,"PRESS X TO BEGIN",WHITE);
+static void drawHUD(void)
+{
+    for (int i = 0; i < PLAYER_MAX_HP; i++) {
+        unsigned int color = i < player.hp ? RED : 0xFF38313D;
+        rect(12 + i * 18, 12, 13, 9, color);
     }
 
-    text(120,225,"PRESS X",WHITE);
+    if (player.magicUnlocked) {
+        rect(12, 28, 9, 9, BLUE);
+        rect(14, 30, 5, 5, LIGHT_BLUE);
+    }
 }
 
-static void drawGame(void) {
-    beginFrame();
+static void drawMenu(void)
+{
+    rect(0, 0, SW, SH, DARK);
 
-    drawCave();
-    drawEnemies();
-    drawMagicPickup();
-    drawShots();
-    drawMiniBoss();
-    drawPlayer();
-    drawSword();
-    drawSparks();
+    rect(80, 58, 320, 5, PURPLE);
+    rect(100, 68, 280, 3, BLUE);
 
-    if (magicUnlocked) {
-        if (magicCooldown == 0)
-            text(8,8,"MAGIC READY",LIGHT_BLUE);
-        else
-            text(8,8,"MAGIC RECHARGING",BLUE);
-    } else {
-        text(8,8,"FIND BLUE CRYSTAL",WHITE);
+    rect(190, 80, 100, 12, LIGHT_BLUE);
+    rect(200, 94, 80, 5, WHITE);
+
+    rect(150, 125, 180, 3, ROCK_LIGHT);
+    rect(175, 140, 130, 3, ROCK_LIGHT);
+
+    rect(176, 174, 128, 25, 0xFF282138);
+    rect(182, 180, 116, 13, BLUE);
+
+    rect(190, 220, 100, 3, PURPLE);
+}
+
+static void drawEnding(void)
+{
+    rect(0, 0, SW, SH, DARK);
+
+    for (int i = 0; i < 22; i++) {
+        float x = (i * 37 + frameCount * (i % 3 + 1)) % SW;
+        float y = (i * 19 + frameCount / 2) % SH;
+        rect(x, y, 3, 3, i % 2 ? LIGHT_BLUE : PURPLE);
     }
 
-    drawPlayerHealth();
-
-    if (room == 0)
-        text(350,8,"CAVE",WHITE);
-    else if (room == 1)
-        text(350,8,"DEPTHS",WHITE);
-    else if (room == 2)
-        text(326,8,"CORRIDOR",WHITE);
-    else
-        text(326,8,bossDefeated ? "EXIT OPEN" : "SANCTUARY",WHITE);
-
-    drawBossHUD();
-
-    endFrame();
+    rect(100, 90, 280, 4, GOLD);
+    rect(120, 106, 240, 3, LIGHT_BLUE);
+    rect(160, 135, 160, 3, GOLD);
 }
 
-static void drawEnding(void) {
-    beginFrame();
-
-    rect(0,0,SW,SH,BLACK);
-    text(174,52,"RANDOM",WHITE);
-    text(66,105,"THE WORLD CONTINUES",WHITE);
-    text(102,145,"PRESS START",WHITE);
-
-    endFrame();
-}
-
-/* =========================================================
-   RESET DO MUNDO
-   ========================================================= */
-
-static void resetWorld(void) {
-    px = 35;
-    py = 190;
-    pvy = 0;
-    cameraX = 0;
-
-    magicUnlocked = 0;
-    jumps = 0;
-    grounded = 0;
-    playerMoving = 0;
-    jumpCut = 0;
-
-    magicCooldown = 0;
-    swordCooldown = 0;
-    swordTimer = 0;
-    swordHitDone = 0;
-    swordFacing = 1;
-
-    playerHP = PLAYER_MAX_HP;
-    playerDamageCooldown = 0;
-
-    bossEncounterStarted = 0;
-    room = 0;
-
-    memset(shots,0,sizeof(shots));
-    memset(sparks,0,sizeof(sparks));
-
-    for (int i = 0; i < ENEMY_COUNT; i++) {
-        enemies[i].active = 1;
-        enemies[i].hp = 1;
-    }
-
-    /* Este inimigo fica desativado na sala do chefe. */
-    enemies[ENEMY_COUNT-1].active = 0;
-
-    boss.x = 2180;
-    boss.y = 194;
-    boss.vx = 0;
-    boss.vy = 0;
-    boss.hp = 10;
-    boss.active = 1;
-    boss.timer = 0;
-    boss.attack = 0;
-    boss.contactCooldown = 0;
-    boss.damageCooldown = 0;
-    boss.grounded = 1;
-
-    bossDefeated = 0;
-}
-
-/* =========================================================
-   PRINCIPAL
-   ========================================================= */
-
-int main(void) {
-    SceCtrlData pad;
-
+int main(void)
+{
     sceCtrlSetSamplingCycle(0);
     sceCtrlSetSamplingMode(PSP_CTRL_MODE_ANALOG);
 
-    memset(shots,0,sizeof(shots));
-    memset(sparks,0,sizeof(sparks));
+    sceGuInit();
 
-    initGraphics();
+    sceGuStart(GU_DIRECT, list);
+    sceGuDrawBuffer(GU_PSM_8888, (void *)0, STRIDE);
+    sceGuDispBuffer(SW, SH, (void *)0x88000, STRIDE);
+    sceGuDepthBuffer((void *)0x110000, STRIDE);
+    sceGuOffset(2048 - SW / 2, 2048 - SH / 2);
+    sceGuViewport(2048, 2048, SW, SH);
+    sceGuDepthRange(65535, 0);
+    sceGuScissor(0, 0, SW, SH);
+    sceGuEnable(GU_SCISSOR_TEST);
+    sceGuDisable(GU_DEPTH_TEST);
+    sceGuDisable(GU_CULL_FACE);
+    sceGuShadeModel(GU_SMOOTH);
+    sceGuFinish();
+    sceGuSync(0, 0);
+
+    sceDisplayWaitVblankStart();
+    sceGuDisplay(GU_TRUE);
+
+    srand(12345);
+    initGame();
 
     while (1) {
-        sceCtrlReadBufferPositive(&pad,1);
+        SceCtrlData pad;
+        sceCtrlReadBufferPositive(&pad, 1);
 
-        unsigned int pressed = pad.Buttons & ~previousButtons;
-        previousButtons = pad.Buttons;
+        frameCount++;
 
-        if (state == 0) {
-            beginFrame();
-            drawMenu();
-            endFrame();
-
-            if (pressed & (PSP_CTRL_START|PSP_CTRL_CROSS)) {
-                state = 1;
-                introPage = 0;
-            }
-        } else if (state == 1) {
-            beginFrame();
-            drawIntro();
-            endFrame();
-
-            if (pressed & PSP_CTRL_CROSS) {
-                if (introPage == 0) {
-                    introPage = 1;
-                } else {
-                    resetWorld();
-                    state = 2;
-                }
-            }
-
-            if (pressed & PSP_CTRL_START) {
-                resetWorld();
-                state = 2;
-            }
-        } else if (state == 2) {
-            if (pressed & PSP_CTRL_START) {
-                state = 0;
-            } else {
-                updateGame(pad,pressed);
-                drawGame();
-            }
-        } else {
-            drawEnding();
-
-            if (pressed & PSP_CTRL_START) {
-                resetWorld();
-                state = 0;
+        if (pressed(pad.Buttons, PSP_CTRL_START)) {
+            if (gameState == 0) {
+                initGame();
+                gameState = 1;
+            } else if (gameState == 3) {
+                initGame();
+                gameState = 0;
             }
         }
 
-        frame++;
+        if (gameState == 1) {
+            updatePlayer(&pad);
+            updateShots();
+            updateBoss();
+            updateSparks();
+        }
+
+        sceGuStart(GU_DIRECT, list);
+        sceGuClearColor(DARK);
+        sceGuClear(GU_COLOR_BUFFER_BIT);
+
+        if (gameState == 0) {
+            drawMenu();
+        } else if (gameState == 1) {
+            drawWorld();
+            drawShots();
+            drawBoss();
+            drawPlayer();
+
+            drawSword(
+                player.x - cameraX,
+                player.y,
+                player.facing
+            );
+
+            drawSparks();
+            drawHUD();
+        } else if (gameState == 2) {
+            drawEnding();
+        } else if (gameState == 3) {
+            rect(0, 0, SW, SH, DARK);
+            rect(100, 90, 280, 4, RED);
+            rect(130, 115, 220, 4, PURPLE);
+            rect(160, 150, 160, 4, ROCK_LIGHT);
+        }
+
+        sceGuFinish();
+        sceGuSync(0, 0);
+        sceDisplayWaitVblankStart();
+        sceGuSwapBuffers();
+
+        oldButtons = pad.Buttons;
     }
 
     sceGuTerm();
