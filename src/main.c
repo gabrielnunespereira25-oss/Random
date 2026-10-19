@@ -1,250 +1,315 @@
+
 #include <pspkernel.h>
 #include <pspdisplay.h>
-#include <pspctrl.h>
 #include <pspgu.h>
+#include <pspctrl.h>
 #include <math.h>
 
-PSP_MODULE_INFO("RANDOM_ALPHA_CHAR", 0, 1, 0);
+PSP_MODULE_INFO("RANDOM_ALPHA", 0, 1, 0);
 PSP_MAIN_THREAD_ATTR(THREAD_ATTR_USER);
 
-#define SW 480
-#define SH 272
-#define FLOOR_Y 226.0f
-#define GRAVITY 0.42f
-#define JUMP_V -7.8f
-#define MOVE_SPEED 2.2f
+#define W 480
+#define H 272
+#define BW 512
+#define WHITE 0xFFFFFFFF
+#define GRAY  0xFF999999
+#define DARK  0xFF242424
+#define BLACK 0xFF050505
+#define PI 3.14159265f
 
-typedef unsigned int Color;
-typedef struct { Color color; float x,y,z; } Vertex;
+typedef struct {
+    unsigned int color;
+    float x, y, z;
+} Vertex;
+
+typedef enum {
+    IDLE, RUN, JUMP, FALL, LAND, CLIMB, ATTACK
+} Animation;
+
+typedef struct {
+    float x, y, vx, vy, time, landTime;
+    int facing, grounded;
+    Animation anim;
+} Player;
 
 static unsigned int __attribute__((aligned(16))) list[262144];
-static unsigned int oldButtons=0;
-static float px=240, py=FLOOR_Y, vx=0, vy=0, anim=0;
-static int facing=1, grounded=1, running=0;
 
-#define BLACK 0xFF080808
-#define DARK  0xFF242424
-#define MID   0xFF777777
-#define LIGHT 0xFFBBBBBB
-#define WHITE 0xFFFFFFFF
-
-static int pressed(unsigned int n,unsigned int o,unsigned int b) {
-    return (n&b)&&!(o&b);
+static float clampf(float v, float a, float b)
+{
+    return v < a ? a : (v > b ? b : v);
 }
 
-static void rect(float x,float y,float w,float h,Color c) {
-    Vertex *v=(Vertex*)sceGuGetMemory(2*sizeof(Vertex));
-    v[0]=(Vertex){c,x,y,0};
-    v[1]=(Vertex){c,x+w,y+h,0};
-    sceGuDrawArray(GU_SPRITES,
-        GU_COLOR_8888|GU_VERTEX_32BITF|GU_TRANSFORM_2D,2,0,v);
-}
+static void triangle(float x1, float y1, float x2, float y2,
+                     float x3, float y3, unsigned int color)
+{
+    Vertex v[3] = {
+        {color, x1, y1, 0},
+        {color, x2, y2, 0},
+        {color, x3, y3, 0}
+    };
 
-static void tri(float x1,float y1,float x2,float y2,
-                float x3,float y3,Color c) {
-    Vertex *v=(Vertex*)sceGuGetMemory(3*sizeof(Vertex));
-    v[0]=(Vertex){c,x1,y1,0};
-    v[1]=(Vertex){c,x2,y2,0};
-    v[2]=(Vertex){c,x3,y3,0};
+    sceGuDisable(GU_TEXTURE_2D);
     sceGuDrawArray(GU_TRIANGLES,
-        GU_COLOR_8888|GU_VERTEX_32BITF|GU_TRANSFORM_2D,3,0,v);
+        GU_COLOR_8888 | GU_VERTEX_32BITF | GU_TRANSFORM_2D,
+        3, 0, v);
 }
 
-static void line(float x1,float y1,float x2,float y2,
-                 float thick,Color c) {
-    float dx=x2-x1,dy=y2-y1;
-    float len=sqrtf(dx*dx+dy*dy);
-    if(len<0.01f) return;
-    float ox=-dy/len*thick*0.5f;
-    float oy= dx/len*thick*0.5f;
-    tri(x1+ox,y1+oy,x2+ox,y2+oy,x2-ox,y2-oy,c);
-    tri(x1+ox,y1+oy,x2-ox,y2-oy,x1-ox,y1-oy,c);
+static void quad(float ax, float ay, float bx, float by,
+                 float cx, float cy, float dx, float dy,
+                 unsigned int color)
+{
+    triangle(ax, ay, bx, by, cx, cy, color);
+    triangle(ax, ay, cx, cy, dx, dy, color);
 }
 
-static void limb(float x1,float y1,float x2,float y2,float thick) {
-    line(x1,y1,x2,y2,thick+2,WHITE);
-    line(x1,y1,x2,y2,thick,DARK);
-    rect(x2-thick*.35f,y2-thick*.35f,
-         thick*.7f,thick*.7f,MID);
+static void shard(float x, float y, float s,
+                  unsigned int color, float tilt)
+{
+    triangle(x, y-s, x+s*.65f+tilt, y+s*.2f,
+             x-s*.35f, y+s*.35f, color);
 }
 
-static void flame(float x,float y) {
-    tri(x-9,y+3,x-8,y-8,x-2,y-15,WHITE);
-    tri(x-2,y-15,x+1,y-5,x+8,y-12,WHITE);
-    tri(x+8,y-12,x+10,y-2,x+7,y+5,WHITE);
-    tri(x-8,y-1,x-4,y-10,x+1,y-3,LIGHT);
-    tri(x+1,y-3,x+5,y-8,x+6,y+3,MID);
-    tri(x-4,y+2,x-2,y-5,x+3,y+2,DARK);
+static void playerInit(Player *p)
+{
+    p->x = 160;
+    p->y = 220;
+    p->vx = p->vy = p->time = p->landTime = 0;
+    p->facing = 1;
+    p->grounded = 1;
+    p->anim = IDLE;
 }
 
-static void character(void) {
-    float bob=0,stride=0,arm=0;
-    float x=px,feet=py;
+static void playerUpdate(Player *p, float dt, unsigned int buttons)
+{
+    dt = clampf(dt, 0, .04f);
+    p->time += dt;
+    p->vx = 0;
 
-    if(grounded&&running) {
-        bob=fabsf(sinf(anim*2))*2.2f;
-        stride=sinf(anim*2)*10;
-        arm=-sinf(anim*2)*8;
-    } else if(grounded) {
-        bob=sinf(anim*.7f)*1.2f;
-        arm=sinf(anim*.7f)*1.5f;
-    } else {
-        stride=(vy<0)?-4:5;
-        arm=(vy<0)?-10:8;
+    if (buttons & PSP_CTRL_LEFT) {
+        p->vx = -105;
+        p->facing = -1;
+    }
+    if (buttons & PSP_CTRL_RIGHT) {
+        p->vx = 105;
+        p->facing = 1;
     }
 
-    rect(x-13,FLOOR_Y+1,26,2,MID);
-
-    float hip=feet-22+bob;
-    float kLX=x-5+stride*.45f;
-    float kLY=feet-12-fabsf(stride)*.12f;
-    float kRX=x+5-stride*.45f;
-    float kRY=feet-12-fabsf(stride)*.12f;
-
-    if(!grounded) {
-        kLX=x-8; kLY=feet-13;
-        kRX=x+8; kRY=feet-16;
+    if ((buttons & PSP_CTRL_CIRCLE) && p->grounded) {
+        p->vy = -175;
+        p->grounded = 0;
+        p->landTime = 0;
     }
 
-    limb(x-4,hip,kLX,kLY,5);
-    limb(kLX,kLY,x-7+stride,feet-2,5);
-    limb(x+4,hip,kRX,kRY,5);
-    limb(kRX,kRY,x+8-stride,feet-2,5);
+    if (!p->grounded) {
+        p->vy += 360 * dt;
+        p->y += p->vy * dt;
 
-    tri(x-13+stride,feet-5,x-5+stride,feet-5,
-        x-4+stride,feet-1,WHITE);
-    tri(x+3-stride,feet-5,x+11-stride,feet-5,
-        x+13-stride,feet-1,WHITE);
-
-    float shoulder=feet-42+bob;
-    float backX=x-10-facing*2+arm*.4f;
-    float backY=shoulder+9;
-    float handX=x-12+arm*.65f;
-    float handY=shoulder+18;
-
-    limb(x-6,shoulder,backX,backY,5);
-    limb(backX,backY,handX,handY,4);
-
-    float elbowX=x+facing*(10+arm*.35f);
-    float elbowY=shoulder+8-arm*.25f;
-    float frontX=x+facing*(13+arm*.7f);
-    float frontY=shoulder+17-arm*.4f;
-
-    limb(x+6,shoulder,elbowX,elbowY,5);
-    limb(elbowX,elbowY,frontX,frontY,4);
-
-    tri(x-9,feet-48+bob,x+8,feet-48+bob,
-        x+10,feet-27+bob,WHITE);
-    tri(x-9,feet-48+bob,x+10,feet-27+bob,
-        x-7,feet-25+bob,WHITE);
-
-    tri(x-6,feet-44+bob,x+5,feet-44+bob,
-        x+7,feet-29+bob,DARK);
-    tri(x-6,feet-44+bob,x+7,feet-29+bob,
-        x-5,feet-28+bob,DARK);
-
-    line(x-6,feet-40+bob,x+6,feet-32+bob,2,LIGHT);
-    rect(x-3,feet-27+bob,7,4,MID);
-
-    rect(x-3,feet-53+bob,6,7,WHITE);
-    flame(x,feet-59+bob);
-
-    if(facing>0) rect(x+1,feet-61+bob,4,2,BLACK);
-    else rect(x-5,feet-61+bob,4,2,BLACK);
-
-    if(running&&grounded) {
-        int p=(int)(anim*4)%3;
-        rect(x-facing*(15+p*3),feet-51-p*3,2,2,
-             p==1?MID:WHITE);
-    }
-}
-
-static void update(SceCtrlData *pad) {
-    running=0;
-    vx=0;
-
-    if(pad->Buttons&PSP_CTRL_LEFT) {
-        vx=-MOVE_SPEED;
-        facing=-1;
-        running=1;
-    }
-    if(pad->Buttons&PSP_CTRL_RIGHT) {
-        vx=MOVE_SPEED;
-        facing=1;
-        running=1;
-    }
-
-    px+=vx;
-    if(px<24) px=24;
-    if(px>SW-24) px=SW-24;
-
-    if(pressed(pad->Buttons,oldButtons,PSP_CTRL_CROSS)&&grounded) {
-        vy=JUMP_V;
-        grounded=0;
-    }
-
-    if(!grounded) {
-        vy+=GRAVITY;
-        py+=vy;
-        if(py>=FLOOR_Y) {
-            py=FLOOR_Y;
-            vy=0;
-            grounded=1;
+        /* Piso provisório para esta demonstração. */
+        if (p->y >= 220) {
+            p->y = 220;
+            p->vy = 0;
+            p->grounded = 1;
+            p->landTime = .15f;
         }
     }
 
-    anim+=(running||!grounded)?0.19f:0.035f;
+    p->x += p->vx * dt;
+    p->x = clampf(p->x, 20, 460);
+
+    if (buttons & PSP_CTRL_UP)
+        p->anim = CLIMB;
+    else if (buttons & PSP_CTRL_CROSS)
+        p->anim = ATTACK;
+    else if (!p->grounded)
+        p->anim = p->vy < 0 ? JUMP : FALL;
+    else if (p->landTime > 0) {
+        p->landTime -= dt;
+        p->anim = LAND;
+    } else if (p->vx != 0)
+        p->anim = RUN;
+    else
+        p->anim = IDLE;
 }
 
-int main(void) {
-    SceCtrlData pad;
-    sceCtrlSetSamplingCycle(0);
-    sceCtrlSetSamplingMode(PSP_CTRL_MODE_ANALOG);
+static void playerDraw(Player *p, float camX, float camY)
+{
+    float x = p->x-camX, y = p->y-camY;
+    float t = p->time, d = (float)p->facing;
+    float run = p->anim == RUN;
+    float jump = p->anim == JUMP;
+    float fall = p->anim == FALL;
+    float land = p->anim == LAND;
+    float climb = p->anim == CLIMB;
+    float attack = p->anim == ATTACK;
 
+    float stride = sinf(t*12)*run;
+    float swing = sinf(t*12+PI)*run;
+    float bob = fabsf(sinf(t*12))*3*run;
+    float bx = x+d*(7*run+4*attack)*.3f;
+    float by = y-bob+7*land-5*jump;
+
+    /* Sombra */
+    triangle(x-15,y+2,x+15,y+2,x,y+5,DARK);
+
+    /* Alma do Negro: chama facetada e fragmentos animados */
+    {
+        float fx=bx+d*1.5f, fy=by-48;
+        shard(fx-5,fy+sinf(t*9)*2,10,GRAY,sinf(t*7)*2);
+        shard(fx+2,fy-5+sinf(t*8),14,WHITE,sinf(t*6)*3);
+        shard(fx+7,fy+1,7,WHITE,sinf(t*10)*2);
+        shard(fx-12,fy+7,5,GRAY,sinf(t*11));
+        shard(fx-16+sinf(t*4)*2,fy-12+sinf(t*5)*3,
+              3.5f,WHITE,0);
+        shard(fx+15+sinf(t*6)*2,fy-8+sinf(t*4)*3,
+              3,GRAY,0);
+    }
+
+    /* Cabeça angular e olho */
+    quad(bx-8,by-43,bx+7,by-45,bx+10,by-32,
+         bx-5,by-29,DARK);
+    quad(bx+d,by-39,bx+d*7,by-40,bx+d*7,by-37,
+         bx+d,by-36,WHITE);
+
+    /* Pescoço e capa */
+    triangle(bx-5,by-31,bx+6,by-32,bx+2,by-24,GRAY);
+    triangle(bx-d*4,by-28,bx-d*24,by-24+stride*2,
+             bx-d*17,by-15,GRAY);
+    triangle(bx-d*3,by-25,bx-d*29,by-17+swing,
+             bx-d*14,by-12,DARK);
+
+    /* Tronco inclinado em facetas */
+    quad(bx-7,by-27,bx+7,by-25,bx+d*10,by-8,
+         bx-d*6,by-7,DARK);
+    triangle(bx-5,by-25,bx+3,by-24,bx-d,by-14,GRAY);
+    triangle(bx+3,by-23,bx+7,by-20,bx+d*7,by-10,BLACK);
+
+    /* Braços articulados */
+    {
+        float sx=bx+d*5, sy=by-23;
+        float fx=sx+d*(8+swing*5);
+        float fy=sy+8-attack*9;
+        float rx=sx-d*(9+swing*4);
+        float ry=sy+7+swing*3;
+
+        if (jump) { fy-=8; ry-=5; }
+        if (climb) {
+            fx=sx+d*8; fy=sy-12;
+            rx=sx-d*8; ry=sy-9;
+        }
+
+        triangle(sx,sy,fx,fy,fx-d*3,fy+5,GRAY);
+        triangle(fx,fy,fx+d*4,fy+2,fx+d*2,fy+6,WHITE);
+        triangle(sx-d*2,sy+1,rx,ry,rx-d*2,ry+5,DARK);
+        triangle(rx,ry,rx-d*3,ry+2,rx,ry+6,GRAY);
+    }
+
+    /* Quadril */
+    triangle(bx-6,by-10,bx+d*8,by-10,bx+d*5,by-3,DARK);
+
+    /* Pernas com passada alternada */
+    {
+        float hx=bx, hy=by-5;
+        float air=7*jump-5*fall;
+
+        float lx=hx+d*(stride*8+air);
+        float ly=hy+10+fall*3;
+        float fx=lx+d*(5+stride*3);
+        float fy=y-1-jump*8+fall*2;
+
+        float rx=hx-d*(stride*8+air);
+        float ry=hy+10;
+        float tx=rx-d*(4-stride*3);
+        float ty=y-1-jump*2+fall*5;
+
+        triangle(hx-d*2,hy,rx,ry,rx+d*4,ry+8,DARK);
+        triangle(rx,ry,tx+d*2,ty-2,tx-d*3,ty+1,GRAY);
+        triangle(tx-d*5,ty,tx+d*4,ty,tx+d*3,ty+3,BLACK);
+
+        triangle(hx+d*2,hy,lx,ly,lx+d*5,ly+5,GRAY);
+        triangle(lx,ly,fx-d*2,fy-2,fx+d*3,fy+1,DARK);
+        triangle(fx-d*4,fy,fx+d*6,fy,fx+d*5,fy+3,WHITE);
+    }
+
+    /* Rastro da corrida */
+    if (run) {
+        shard(x-d*22,y-17+sinf(t*15),3,GRAY,0);
+        shard(x-d*30,y-8+sinf(t*12),2,WHITE,0);
+    }
+
+    /* Impacto ao aterrissar */
+    if (land) {
+        triangle(x-17,y+1,x-8,y-2,x-11,y+2,WHITE);
+        triangle(x+17,y+1,x+8,y-2,x+11,y+2,GRAY);
+    }
+
+    /* Golpe geométrico */
+    if (attack) {
+        triangle(x+d*13,by-23,x+d*31,by-13,
+                 x+d*18,by-8,WHITE);
+        triangle(x+d*18,by-30,x+d*35,by-21,
+                 x+d*25,by-17,GRAY);
+    }
+}
+
+static void graphicsInit(void)
+{
     sceGuInit();
-    sceGuStart(GU_DIRECT,list);
-    sceGuDrawBuffer(GU_PSM_8888,(void*)0,512);
-    sceGuDispBuffer(SW,SH,(void*)0x88000,512);
-    sceGuDepthBuffer((void*)0x110000,512);
-    sceGuOffset(2048-SW/2,2048-SH/2);
-    sceGuViewport(2048,2048,SW,SH);
-    sceGuScissor(0,0,SW,SH);
+    sceGuStart(GU_DIRECT, list);
+    sceGuDrawBuffer(GU_PSM_8888,(void*)0,BW);
+    sceGuDispBuffer(W,H,(void*)0x88000,BW);
+    sceGuDepthBuffer((void*)0x110000,BW);
+    sceGuOffset(2048-W/2,2048-H/2);
+    sceGuViewport(2048,2048,W,H);
+    sceGuScissor(0,0,W,H);
     sceGuEnable(GU_SCISSOR_TEST);
     sceGuDisable(GU_DEPTH_TEST);
+    sceGuDisable(GU_CULL_FACE);
     sceGuDisable(GU_TEXTURE_2D);
+    sceGuClearColor(BLACK);
     sceGuFinish();
     sceGuSync(0,0);
     sceDisplayWaitVblankStart();
     sceGuDisplay(GU_TRUE);
+}
 
-    while(1) {
+int main(void)
+{
+    Player p;
+    SceCtrlData pad;
+    float dt=1.0f/60.0f;
+
+    sceCtrlSetSamplingCycle(0);
+    sceCtrlSetSamplingMode(PSP_CTRL_MODE_ANALOG);
+    graphicsInit();
+    playerInit(&p);
+
+    while (1) {
         sceCtrlReadBufferPositive(&pad,1);
-        if(pressed(pad.Buttons,oldButtons,PSP_CTRL_START)) break;
+        if (pad.Buttons & PSP_CTRL_START) break;
 
-        update(&pad);
+        playerUpdate(&p,dt,pad.Buttons);
 
         sceGuStart(GU_DIRECT,list);
         sceGuClearColor(BLACK);
         sceGuClear(GU_COLOR_BUFFER_BIT|GU_DEPTH_BUFFER_BIT);
-        sceGuDisable(GU_DEPTH_TEST);
-        sceGuDisable(GU_TEXTURE_2D);
 
-        rect(0,FLOOR_Y+3,SW,2,MID);
-        for(int i=0;i<SW;i+=24)
-            rect(i,FLOOR_Y+7,12,1,DARK);
+        /* Fundo demonstrativo monocromático */
+        triangle(0,180,80,130,145,180,DARK);
+        triangle(80,130,145,180,180,155,GRAY);
+        triangle(320,40,410,40,365,105,DARK);
+        triangle(365,105,410,40,455,115,GRAY);
 
-        character();
+        quad(0,222,480,222,480,272,0,272,BLACK);
+        quad(0,220,480,220,480,223,0,223,GRAY);
+
+        playerDraw(&p,0,0);
 
         sceGuFinish();
         sceGuSync(0,0);
         sceDisplayWaitVblankStart();
         sceGuSwapBuffers();
-
-        oldButtons=pad.Buttons;
-        sceKernelDelayThread(16667);
     }
 
-    sceGuDisplay(GU_FALSE);
     sceGuTerm();
     sceKernelExitGame();
     return 0;
