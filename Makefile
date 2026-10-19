@@ -1,4 +1,3 @@
-
 TARGET = RANDOM
 OBJS = src/main.o
 
@@ -13,7 +12,7 @@ PSP_FW_VERSION = 660
 EXTRA_TARGETS = EBOOT.PBP
 PSP_EBOOT_TITLE = RANDOM Beta 0.1
 
-LIBS = -lpspgu -lpspgum -lpspdebug -lpspdisplay -lpspctrl -lpspkernel
+LIBS = -lpspgu -lpspgum -lpspdebug -lpspdisplay -lpspctrl -lpspkernel -lm
 
 PSPSDK := $(shell psp-config --pspsdk-path)
 include $(PSPSDK)/lib/build.mak
