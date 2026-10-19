@@ -204,7 +204,10 @@ static void drawMobs(void){
  }
  if(boss.active){
   wr(boss.x,boss.y,36,32,PURPLE);wr(boss.x+5,boss.y+7,7,6,YELLOW);wr(boss.x+23,boss.y+7,7,6,YELLOW);
-  rect(345,8,125,7,DARK);rect(346,9,123.0f*boss.hp/(float)(zoneBossMax[zone]?zoneBossMax[zone]:1),5,RED);
+  rect(345,8,125,7,DARK);
+  { float ratio=boss.hp/(float)(zoneBossMax[zone]?zoneBossMax[zone]:1);
+    if(ratio<0.0f)ratio=0.0f;if(ratio>1.0f)ratio=1.0f;
+    rect(346,9,123.0f*ratio,5,RED); }
  }
 }
 static void drawCheckpoints(void){
@@ -225,6 +228,7 @@ static void draw(void){
  sceGuStart(GU_DIRECT,list);sceGuClearColor(BLACK);sceGuClear(GU_COLOR_BUFFER_BIT|GU_DEPTH_BUFFER_BIT);
  sceGuDisable(GU_DEPTH_TEST);sceGuDisable(GU_TEXTURE_2D);
  if(zone==CAVE)drawCave();else if(zone==FOREST)drawForest();else drawOtherZone();
+ /* Decoração visual adicional. As colisões continuam definidas em update(). */
  drawExtraArchitecture();
  drawCheckpoints();drawMobs();
  for(int i=0;i<8;i++)if(shots[i].on)wr(shots[i].x,shots[i].y,9,7,PURPLE);
@@ -285,7 +289,8 @@ static void changeZone(int nz,float nx,float ny){
  zone=nz;px=nx;py=ny;vy=0;grounded=1;jumps=2;
  for(int i=0;i<8;i++)shots[i].on=0;
  for(int i=0;i<N_MOBS;i++){mobs[i].alive=1;mobs[i].hp=1+(zone/2);mobs[i].x=280.0f+i*300;mobs[i].y=220;mobs[i].min=mobs[i].x-45;mobs[i].max=mobs[i].x+45;mobs[i].speed=.7f+i*.12f;mobs[i].cd=0;}
- boss.active=1;boss.hp=zoneBossHP[zone];boss.x=1320;boss.y=218;boss.vy=0;boss.grounded=1;boss.timer=45;boss.cd=0;
+ boss.active=1;boss.hp=zoneBossHP[zone];boss.x=1320;boss.y=218;boss.vy=0;
+ boss.grounded=1;boss.timer=45;boss.cd=0;
 }
 static void transition(void){
  if(px>=WW-PW-2 && zone<ARENA && !boss.active)changeZone(zone+1,35,GROUND-PH);
@@ -293,7 +298,8 @@ static void transition(void){
 }
 static void update(SceCtrlData p,unsigned int old){
  float sp=2.0f+.25f*(speedLevel-1);
- int l=(p.Buttons&PSP_CTRL_LEFT)||p.Lx<90,r=(p.Buttons&PSP_CTRL_RIGHT)||p.Lx>165;
+ int l=(p.Buttons&PSP_CTRL_LEFT)||p.Lx<80;
+ int r=(p.Buttons&PSP_CTRL_RIGHT)||p.Lx>175;
  if(l){px-=sp;face=0;}if(r){px+=sp;face=1;}
  if(px<0)px=0;if(px>WW-PW)px=WW-PW;
  if(pressed(p.Buttons,old,PSP_CTRL_CROSS)&&jumps>0){vy=-6.3f;grounded=0;jumps--;}
@@ -316,12 +322,24 @@ static void update(SceCtrlData p,unsigned int old){
 int main(void){
  sceCtrlSetSamplingCycle(0);sceCtrlSetSamplingMode(PSP_CTRL_MODE_ANALOG);
  sceGuInit();sceGuStart(GU_DIRECT,list);
- sceGuDrawBuffer(GU_PSM_8888,(void*)0,512);
+ /* Buffers separados na VRAM do PSP: 512x272x4 bytes por framebuffer.
+    O framebuffer exibido começa depois do primeiro; o depth buffer vem depois
+    dos dois framebuffers, evitando sobreposição entre as regiões. */
+ sceGuDrawBuffer(GU_PSM_8888,(void*)0x00000,512);
  sceGuDispBuffer(SW,SH,(void*)0x88000,512);
  sceGuDepthBuffer((void*)0x110000,512);
- sceGuOffset(2048-SW/2,2048-SH/2);sceGuViewport(2048,2048,SW,SH);
- sceGuDepthRange(65535,0);sceGuScissor(0,0,SW,SH);sceGuEnable(GU_SCISSOR_TEST);
- sceGuDisable(GU_DEPTH_TEST);sceGuFinish();sceGuSync(0,0);sceDisplayWaitVblankStart();sceGuDisplay(GU_TRUE);
+ sceGuOffset(2048-(SW/2),2048-(SH/2));
+ sceGuViewport(2048,2048,SW,SH);
+ sceGuDepthRange(65535,0);
+ sceGuScissor(0,0,SW,SH);
+ sceGuEnable(GU_SCISSOR_TEST);
+ sceGuDisable(GU_DEPTH_TEST);
+ sceGuDisable(GU_TEXTURE_2D);
+ sceGuShadeModel(GU_SMOOTH);
+ sceGuFinish();
+ sceGuSync(0,0);
+ sceDisplayWaitVblankStart();
+ sceGuDisplay(GU_TRUE);
  SceCtrlData p;unsigned int old=0;
  while(1){
   sceCtrlReadBufferPositive(&p,1);
