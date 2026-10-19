@@ -25,12 +25,8 @@ PSP_MAIN_THREAD_ATTR(THREAD_ATTR_USER);
 #define SH 272
 #define WW 1600
 #define GROUND 250
-#define PW 32
+#define PW 24
 #define PH 48
-#define ZW 24
-#define ZH 40
-#define GOLEM_W 96
-#define GOLEM_H 144
 #define CAVE 0
 #define FOREST 1
 #define CITY 2
@@ -60,22 +56,22 @@ static unsigned int __attribute__((aligned(16))) list[262144];
 #define SKIN   0xFF70B8E8
 
 static int zone=CAVE, paused=0, face=1, grounded=1, jumps=2, swordCD=0;
-static float cam=0, px=60, py=GROUND-PH, vy=0;
+static float cam=0, px=60, py=GROUND-48, vy=0;
 static int hp=5,maxHP=5, magic=0, magicCD=0;
 static int xp=0, level=1, nextXP=20, points=0;
 static int magicPower=1, swordDamage=1, speedLevel=1, defense=0, selected=0;
 static int cpZone=CAVE, cpReached[6]={0,0,0,0,0,0};
-static float cpX=60,cpY=GROUND-PH;
+static float cpX=60,cpY=GROUND-48;
 static int zoneBossHP[ZONE_COUNT]={12,16,20,24,28,40};
 static int zoneBossMax[ZONE_COUNT]={12,16,20,24,28,40};
 
 typedef struct { float x,y,min,max,speed; int alive,hp,cd; } Mob;
 static Mob mobs[N_MOBS]={
- {300,GROUND-ZH,250,380,.8f,1,1,0},{610,GROUND-ZH,550,680,1,1,1,0},
- {960,GROUND-ZH,900,1040,.9f,1,1,0},{1190,GROUND-ZH,1150,1250,1.1f,1,1,0}
+ {300,GROUND-40,250,380,.8f,1,3,0},{610,GROUND-40,550,680,1,1,3,0},
+ {960,GROUND-40,900,1040,.9f,1,3,0},{1190,GROUND-40,1150,1250,1.1f,1,3,0}
 };
 static struct {float x,y,vy;int grounded,timer,active,hp,cd;} boss=
- {1320,GROUND-GOLEM_H,0,1,50,1,12,0};
+ {1350,GROUND-144,0,1,50,1,40,0};
 typedef struct {int on;float x,y,vx;} Shot;
 static Shot shots[8];
 
@@ -159,7 +155,7 @@ static int damage(void){int d=2-defense;return d<1?1:d;}
 static void respawn(void){
  for(int i=0;i<8;i++)shots[i].on=0;
  zone=cpZone;px=cpX;py=cpY;vy=0;grounded=1;jumps=2;hp=maxHP;
- cam=px+PW/2.0f-SW/2.0f;if(cam<0)cam=0;if(cam>WW-SW)cam=WW-SW;
+ cam=px-SW/2;if(cam<0)cam=0;if(cam>WW-SW)cam=WW-SW;
 }
 static void drawCave(void){
  rect(0,0,SW,SH,BLACK);wr(0,0,WW,GROUND,DARK);wr(0,GROUND,WW,22,STONE);
@@ -168,11 +164,6 @@ static void drawCave(void){
  wr(190,190,100,10,STONE);wr(430,160,110,10,STONE);wr(650,190,100,10,STONE);
  wr(680,135,70,10,GRAY);wr(850,180,100,10,STONE);wr(1080,155,100,10,STONE);
  wr(1300,235,150,15,GRAY);
- /* detalhes adicionais do chão: rachaduras, lascas e pedras */
- for(int k=0;k<24;k++){float cx=35+k*64.0f;tri(cx,GROUND+2,cx+7,GROUND+10,cx+15,GROUND+2,BLACK);wr(cx+22,GROUND+8,5,3,LIGHT);}
- for(int k=0;k<12;k++){float cx=90+k*127.0f;tri(cx,GROUND-2,cx+8,GROUND-15-(k%3)*4,cx+18,GROUND-2,STONE);}
- /* sombras e linhas nas paredes */
- for(int k=0;k<18;k++){float cx=55+k*86.0f;wr(cx,45+(k%4)*24,3,25,BLACK);wr(cx+5,55+(k%3)*20,2,17,GRAY);}
  /* Labirinto original: paredes que formam bifurcacoes e salas laterais. */
  wr(150,210,12,40,STONE); wr(310,145,12,105,STONE);
  wr(330,145,95,8,GRAY); wr(425,145,12,48,STONE);
@@ -202,95 +193,73 @@ static void drawOtherZone(void){
  else {rect(0,0,SW,SH,0xFF140D22);wr(0,GROUND,WW,22,PURPLE);wr(0,GROUND+22,WW,20,DARK);for(int x=80;x<WW;x+=160){wr(x,GROUND-8,4,8,YELLOW);}wr(650,185,180,10,PURPLE);wr(1020,155,150,10,PURPLE);wr(250,70,12,180,PURPLE);wr(1330,70,12,180,PURPLE);wr(265,70,1065,8,STONE);}
 }
 static void drawPlayer(void){
- /* Personagem desenhado em C: humanoide detalhado, sem sprites externos. */
  float x=px-cam, y=py;
- /* cabelo e cabeça */
- rect(x+8,y+1,17,5,BLACK); tri(x+cam+7,y+5,x+cam+11,y-1,x+cam+14,y+6,BLACK);
- tri(x+cam+18,y+5,x+cam+23,y-2,x+cam+26,y+6,BLACK);
- rect(x+10,y+5,14,13,SKIN); rect(x+21,y+10,3,3,RED);
- rect(x+10,y+15,14,4,DARK); /* máscara */
- /* pescoço, camisa e ombros */
- rect(x+14,y+18,7,4,GRAY); rect(x+6,y+21,22,14,LIGHT);
- rect(x+9,y+22,5,12,GRAY); rect(x+20,y+22,4,12,GRAY);
- rect(x+15,y+22,3,12,DARK); /* cinto e costuras */
- rect(x+7,y+33,20,3,BLACK); rect(x+16,y+33,3,3,RED);
- /* braços articulados */
- rect(x+3,y+22,5,12,LIGHT); rect(x+2,y+32,6,5,GRAY);
- rect(x+26,y+22,5,12,LIGHT); rect(x+26,y+32,5,5,GRAY);
- /* calças e botas */
- rect(x+9,y+36,6,8,DARK); rect(x+19,y+36,6,8,DARK);
- rect(x+8,y+43,7,4,BLACK); rect(x+19,y+43,8,4,BLACK);
- /* katana nas costas */
- rect(x+(face?3:25),y+18,3,17,BLACK);
- rect(x+(face?2:24),y+16,5,2,RED);
- /* barra de vida */
- rect(8,8,80,7,DARK);rect(9,9,78.0f*hp/(maxHP?maxHP:1),5,RED);
+ /* Bainha nas costas, corpo humanoide e detalhes desenhados em C. */
+ rect(x-3,y+13,5,24,DARK); rect(x-2,y+12,3,22,STONE);
+ /* cabelo */
+ rect(x+5,y+1,16,6,WHITE); tri(x+5,y+6,x+2,y+1,x+9,y+4,WHITE);
+ tri(x+14,y+5,x+18,y-2,x+19,y+6,WHITE);
+ /* cabeça e rosto */
+ rect(x+6,y+5,14,14,LIGHT); rect(x+7,y+8,12,7,GRAY);
+ rect(x+15,y+9,3,2,BLACK); rect(x+7,y+15,12,3,WHITE);
+ /* pescoço, camisa e faixa */
+ rect(x+10,y+18,7,4,GRAY); rect(x+5,y+21,17,15,WHITE);
+ rect(x+5,y+22,4,13,LIGHT); rect(x+18,y+22,4,13,GRAY);
+ rect(x+10,y+23,3,10,STONE); rect(x+5,y+34,17,3,DARK);
+ /* braços */
+ rect(x+1,y+22,5,14,LIGHT); rect(x+21,y+22,5,13,GRAY);
+ rect(x+1,y+34,5,4,WHITE); rect(x+21,y+33,5,4,LIGHT);
+ /* pernas e botas */
+ rect(x+7,y+37,6,8,GRAY); rect(x+15,y+37,6,8,STONE);
+ rect(x+5,y+44,8,4,WHITE); rect(x+15,y+44,8,4,WHITE);
+ /* katana na mão durante ataque / pronta junto ao corpo */
+ rect(face?x+25:x-7,y+27,3,12,DARK);
+ rect(face?x+26:x-8,y+20,2,9,LIGHT);
+ /* HUD de vida */
+ rect(8,8,80,7,DARK); rect(9,9,78.0f*hp/(maxHP?maxHP:1),5,RED);
 }
 static void drawZombie(float x,float y,int type){
- /* Zumbis humanoides cinzentos: comum, corredor e bruto. */
- float scale=type==2?1.55f:1.0f;
- float w=ZW*scale,h=ZH*scale;
- wr(x+4*scale,y+2*scale,16*scale,13*scale,GRAY);
- wr(x+3*scale,y+1*scale,18*scale,4*scale,STONE);
- /* olhos fundos, sem boca sorridente */
- wr(x+7*scale,y+6*scale,3*scale,2*scale,BLACK);
- wr(x+15*scale,y+6*scale,3*scale,2*scale,BLACK);
- /* camisa rasgada e ombros */
- wr(x+2*scale,y+15*scale,w-4*scale,13*scale,STONE);
- wr(x+5*scale,y+16*scale,4*scale,9*scale,GRAY);
- wr(x+13*scale,y+18*scale,3*scale,7*scale,DARK);
- /* braços caídos e rasgados */
- wr(x,y+16*scale,4*scale,12*scale,GRAY);
- wr(x+w-4*scale,y+17*scale,4*scale,12*scale,GRAY);
- wr(x+2*scale,y+27*scale,5*scale,3*scale,DARK);
- /* calças e botas */
- wr(x+5*scale,y+28*scale,5*scale,9*scale,DARK);
- wr(x+14*scale,y+28*scale,5*scale,9*scale,DARK);
- wr(x+4*scale,y+36*scale,7*scale,4*scale,BLACK);
- wr(x+13*scale,y+36*scale,8*scale,4*scale,BLACK);
- /* fissuras na pele e roupa */
- tri(x+11*scale,y+9*scale,x+13*scale,y+12*scale,x+10*scale,y+13*scale,DARK);
+ /* Zumbi humanoide cinza, sem casaco. Cada tipo tem proporções próprias. */
+ float h=(type==2)?56.0f:40.0f, w=(type==2)?30.0f:20.0f;
+ Color skin=(type==2)?STONE:GRAY;
+ rect(x+4,y+2,w-8,10,skin); rect(x+2,y+5,3,7,DARK);
+ rect(x+w-5,y+5,3,7,DARK); rect(x+5,y+7,3,2,BLACK);rect(x+w-8,y+7,3,2,BLACK);
+ rect(x+4,y+12,w-8,3,DARK); /* boca rasgada, sem sorriso */
+ rect(x+3,y+15,w-6,(type==2)?22:14,skin);
+ rect(x+1,y+16,4,13,GRAY);rect(x+w-5,y+16,4,13,GRAY);
+ rect(x+3,y+27,w-6,3,DARK); /* camiseta rasgada */
+ rect(x+4,y+30,w-8,(type==2)?12:7,STONE);
+ rect(x+4,y+h-10,5,8,DARK);rect(x+w-9,y+h-10,5,8,DARK);
+ rect(x+2,y+h-3,8,3,BLACK);rect(x+w-10,y+h-3,8,3,BLACK);
  if(type==1){ /* corredor: braços estendidos */
-   wr(x-5,y+18,7,3,GRAY); wr(x+w-2,y+18,8,3,GRAY);
+   rect(x-5,y+16,8,4,GRAY);rect(x+w-3,y+17,9,4,GRAY);
  }
 }
 static void drawGolem(void){
- float x=boss.x,y=boss.y;
- /* pernas e pés maciços */
- wr(x+12,y+104,28,34,DARK); wr(x+57,y+104,28,34,DARK);
- wr(x+5,y+132,38,12,STONE); wr(x+53,y+132,38,12,STONE);
- /* tronco de placas de pedra */
- wr(x+8,y+43,80,67,STONE); wr(x+14,y+48,68,55,GRAY);
- wr(x+20,y+57,16,40,DARK); wr(x+60,y+57,16,40,DARK);
- wr(x+39,y+52,18,48,STONE);
- /* ombros e braços enormes */
- wr(x-2,y+43,27,37,GRAY); wr(x+71,y+43,27,37,GRAY);
- wr(x-5,y+73,29,34,STONE); wr(x+72,y+73,29,34,STONE);
- wr(x-8,y+99,34,25,DARK); wr(x+70,y+99,34,25,DARK);
- /* cabeça quadrada, sem boca */
- wr(x+22,y+4,52,40,DARK); wr(x+27,y+8,42,32,GRAY);
- tri(x+24,y+10,x+31,y-5,x+39,y+9,STONE);
- tri(x+58,y+9,x+69,y-6,x+75,y+10,STONE);
- /* fendas de olhos ameaçadoras */
- wr(x+32,y+19,12,5,BLACK); wr(x+56,y+19,12,5,BLACK);
- wr(x+35,y+20,7,2,RED); wr(x+58,y+20,7,2,RED);
+ float x=boss.x-cam,y=boss.y;
+ /* 144 px de altura: três vezes a altura visual do player */
+ tri(x+8,y+24,x+17,y+1,x+28,y+23,STONE);
+ tri(x+75,y+23,x+86,y+1,x+96,y+24,STONE);
+ rect(x+14,y+17,76,27,GRAY);rect(x+19,y+22,66,18,STONE);
+ rect(x+26,y+27,13,4,BLACK);rect(x+65,y+27,13,4,BLACK);
+ rect(x+43,y+25,18,25,DARK); /* fenda vertical, sem boca sorridente */
+ rect(x+9,y+45,86,40,STONE);rect(x+16,y+49,72,31,GRAY);
+ rect(x+20,y+54,12,4,DARK);rect(x+70,y+61,12,4,DARK);
+ rect(x+3,y+48,18,49,GRAY);rect(x+83,y+48,18,49,GRAY);
+ rect(x,y+62,21,26,STONE);rect(x+83,y+62,21,26,STONE);
+ rect(x+21,y+84,62,36,GRAY);rect(x+28,y+90,48,24,STONE);
+ rect(x+27,y+119,20,20,GRAY);rect(x+58,y+119,20,20,GRAY);
+ rect(x+23,y+137,25,7,DARK);rect(x+57,y+137,25,7,DARK);
  /* rachaduras */
- tri(x+47,y+26,x+43,y+34,x+49,y+32,DARK);
- tri(x+18,y+57,x+29,y+68,x+23,y+75,DARK);
- tri(x+67,y+73,x+76,y+82,x+70,y+91,DARK);
- tri(x+43,y+80,x+49,y+89,x+45,y+98,DARK);
- /* espada colossal */
- wr(x+90,y+60,5,61,DARK); wr(x+85,y+58,15,5,LIGHT);
- tri(x+87,y+58,x+92,y+28,x+98,y+58,GRAY);
+ tri(x+29,y+49,x+36,y+59,x+32,y+68,DARK);tri(x+75,y+83,x+67,y+94,x+77,y+103,DARK);
+ rect(345,8,125,7,DARK);rect(346,9,123.0f*boss.hp/(float)(zoneBossMax[zone]?zoneBossMax[zone]:1),5,RED);
 }
 static void drawMobs(void){
  for(int i=0;i<N_MOBS;i++)if(mobs[i].alive){
-  int type=(i%3); drawZombie(mobs[i].x,mobs[i].y,type);
+   int type=(i==1)?1:((i==3)?2:0);
+   drawZombie(mobs[i].x-cam,mobs[i].y,type);
  }
- if(boss.active){
-  drawGolem();
-  rect(300,8,170,7,DARK);rect(301,9,168.0f*boss.hp/(float)(zoneBossMax[zone]?zoneBossMax[zone]:1),5,RED);
- }
+ if(boss.active)drawGolem();
 }
 static void drawCheckpoints(void){
  float xs[3]={520,1050,800};int zs[3]={CAVE,CAVE,FOREST};
@@ -324,10 +293,10 @@ static void updateShots(void){
   shots[i].x+=shots[i].vx;if(shots[i].x<0||shots[i].x>WW)shots[i].on=0;
   if(zone>=ZONE_COUNT)continue;
   Box s={shots[i].x,shots[i].y,9,7};
-  for(int m=0;m<N_MOBS;m++)if(mobs[m].alive&&hit(s,(Box){mobs[m].x,mobs[m].y,ZW,ZH})){
+  for(int m=0;m<N_MOBS;m++)if(mobs[m].alive&&hit(s,(Box){mobs[m].x,mobs[m].y,(m==3)?30:20,(m==3)?56:40})){
    mobs[m].hp-=magicPower;shots[i].on=0;if(mobs[m].hp<=0){mobs[m].alive=0;addXP(5);}break;
   }
-  if(shots[i].on&&boss.active&&hit(s,(Box){boss.x,boss.y,GOLEM_W,GOLEM_H})){
+  if(shots[i].on&&boss.active&&hit(s,(Box){boss.x,boss.y,104,144})){
    boss.hp-=magicPower;shots[i].on=0;if(boss.hp<=0){boss.active=0;addXP(50);}
   }
  }
@@ -336,26 +305,26 @@ static void updateMobs(void){
  for(int i=0;i<N_MOBS;i++)if(mobs[i].alive){
   mobs[i].x+=mobs[i].speed;if(mobs[i].x<mobs[i].min||mobs[i].x>mobs[i].max)mobs[i].speed=-mobs[i].speed;
   if(mobs[i].cd>0)mobs[i].cd--;
-  if(hit(pbox(),(Box){mobs[i].x,mobs[i].y,ZW,ZH})&&!mobs[i].cd){hp-=damage();mobs[i].cd=35;}
+  if(hit(pbox(),(Box){mobs[i].x,mobs[i].y,(i==3)?30:20,(i==3)?56:40})&&!mobs[i].cd){hp-=damage();mobs[i].cd=35;}
  }
  if(boss.active){
   if(boss.cd>0)boss.cd--;
   if(boss.grounded&&fabsf(px-boss.x)<300&&boss.timer<=0){boss.vy=-6;boss.grounded=0;boss.timer=70;}
   if(boss.timer>0)boss.timer--;
   boss.vy+=.25f;boss.y+=boss.vy;
-  if(boss.y>=GROUND-GOLEM_H){boss.y=GROUND-GOLEM_H;boss.vy=0;boss.grounded=1;}
+  if(boss.y>=GROUND-144){boss.y=GROUND-144;boss.vy=0;boss.grounded=1;}
   if(px<boss.x)boss.x-=.5f;else boss.x+=.5f;
   if(boss.x<1300)boss.x=1300;if(boss.x>1410)boss.x=1410;
-  if(hit(pbox(),(Box){boss.x,boss.y,GOLEM_W,GOLEM_H})&&!boss.cd){hp-=damage();boss.cd=45;}
+  if(hit(pbox(),(Box){boss.x,boss.y,104,144})&&!boss.cd){hp-=damage();boss.cd=45;}
  }
 }
 static void sword(int down){
  static int was=0;if(!down){was=0;return;}if(was||swordCD>0)return;was=1;swordCD=14;
  Box a={px+(face?PW:-24),py+5,24,20};
- for(int i=0;i<N_MOBS;i++)if(mobs[i].alive&&hit(a,(Box){mobs[i].x,mobs[i].y,ZW,ZH})){
+ for(int i=0;i<N_MOBS;i++)if(mobs[i].alive&&hit(a,(Box){mobs[i].x,mobs[i].y,(i==3)?30:20,(i==3)?56:40})){
   mobs[i].hp-=swordDamage;if(mobs[i].hp<=0){mobs[i].alive=0;addXP(5);}
  }
- if(boss.active&&!boss.cd&&hit(a,(Box){boss.x,boss.y,GOLEM_W,GOLEM_H})){
+ if(boss.active&&!boss.cd&&hit(a,(Box){boss.x,boss.y,104,144})){
   boss.hp-=swordDamage;boss.cd=12;if(boss.hp<=0){boss.active=0;addXP(50);}
  }
 }
@@ -369,8 +338,8 @@ static void changeZone(int nz,float nx,float ny){
  if(nz<0||nz>=ZONE_COUNT)return;
  zone=nz;px=nx;py=ny;vy=0;grounded=1;jumps=2;
  for(int i=0;i<8;i++)shots[i].on=0;
- for(int i=0;i<N_MOBS;i++){mobs[i].alive=1;mobs[i].hp=1+(zone/2);mobs[i].x=280.0f+i*300;mobs[i].y=GROUND-ZH;mobs[i].min=mobs[i].x-45;mobs[i].max=mobs[i].x+45;mobs[i].speed=.7f+i*.12f;mobs[i].cd=0;}
- boss.active=1;boss.hp=zoneBossHP[zone];boss.x=1320;boss.y=GROUND-GOLEM_H;boss.vy=0;boss.grounded=1;boss.timer=45;boss.cd=0;
+ for(int i=0;i<N_MOBS;i++){mobs[i].alive=1;mobs[i].hp=3+(zone/2);mobs[i].x=280.0f+i*300;mobs[i].y=GROUND-40;mobs[i].min=mobs[i].x-45;mobs[i].max=mobs[i].x+45;mobs[i].speed=.7f+i*.12f;mobs[i].cd=0;}
+ boss.active=1;boss.hp=zoneBossHP[zone];boss.x=1320;boss.y=GROUND-144;boss.vy=0;boss.grounded=1;boss.timer=45;boss.cd=0;
 }
 static void transition(void){
  if(px>=WW-PW-2 && zone<ARENA && !boss.active)changeZone(zone+1,35,GROUND-PH);
@@ -396,7 +365,7 @@ static void update(SceCtrlData p,unsigned int old){
  transition();checkpoints();updateMobs();updateShots();
  if(zone==CAVE&&!magic&&hit(pbox(),(Box){713,100,24,24}))magic=1;
  if(hp<=0)respawn();
- cam=px+PW/2.0f-SW/2.0f;if(cam<0)cam=0;if(cam>WW-SW)cam=WW-SW;
+ cam=px-SW/2;if(cam<0)cam=0;if(cam>WW-SW)cam=WW-SW;
 }
 int main(void){
  sceCtrlSetSamplingCycle(0);sceCtrlSetSamplingMode(PSP_CTRL_MODE_ANALOG);
