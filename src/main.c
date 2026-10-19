@@ -24,7 +24,7 @@
  * START: melhorias
  * SELECT: menu principal
  * L: zona anterior (teste)
- * R: proxima zona antes do dash; dash depois.
+ * R: dash depois de desbloqueado
  *
  * Requer PSPSDK.
  */
@@ -202,11 +202,19 @@ static void tri(float x1, float y1,
     Vertex *v = (Vertex *)sceGuGetMemory(sizeof(Vertex) * 3);
 
     v[0].color = c;
-    v[0].x = x1; v[0].y = y1; v[0].z = 0;
+    v[0].x = x1;
+    v[0].y = y1;
+    v[0].z = 0;
+
     v[1].color = c;
-    v[1].x = x2; v[1].y = y2; v[1].z = 0;
+    v[1].x = x2;
+    v[1].y = y2;
+    v[1].z = 0;
+
     v[2].color = c;
-    v[2].x = x3; v[2].y = y3; v[2].z = 0;
+    v[2].x = x3;
+    v[2].y = y3;
+    v[2].z = 0;
 
     sceGuDrawArray(
         GU_TRIANGLES,
@@ -250,6 +258,30 @@ static void drawText(const char *s, int x, int y, Color c)
             ch = ch - 'a' + 'A';
 
         if (ch == ' ') {
+            x += 6;
+            continue;
+        }
+
+        if (ch == '/') {
+            rect(x + 3, y, 1, 7, c);
+            rect(x + 2, y + 3, 1, 2, c);
+            x += 6;
+            continue;
+        }
+
+        if (ch == '+') {
+            rect(x + 1, y + 3, 4, 1, c);
+            rect(x + 3, y + 1, 1, 5, c);
+            x += 6;
+            continue;
+        }
+
+        if (ch == '?') {
+            rect(x + 1, y, 3, 1, c);
+            rect(x + 4, y + 1, 1, 2, c);
+            rect(x + 2, y + 3, 2, 1, c);
+            rect(x + 2, y + 4, 1, 1, c);
+            rect(x + 2, y + 6, 1, 1, c);
             x += 6;
             continue;
         }
@@ -325,7 +357,12 @@ static void addPlatform(float x, float y, float w, float h)
 static void buildPlatforms(void)
 {
     platformCount = 0;
-    addPlatform(0, GROUND, WORLD_W, 100);
+
+    /* Plataforma principal, usada tambem pela colisao. */
+    if (zone == 5)
+        addPlatform(0,440,WORLD_W,60);
+    else
+        addPlatform(0,GROUND,WORLD_W,100);
 
     switch (zone) {
     case 0:
@@ -406,7 +443,6 @@ static void buildPlatforms(void)
         break;
 
     case 5:
-        addPlatform(0,440,WORLD_W,60);
         addPlatform(150,410,130,14);
         addPlatform(350,390,130,14);
         addPlatform(550,410,130,14);
@@ -426,7 +462,8 @@ static void drawPlatforms(void)
 {
     int i;
 
-    for (i = 1; i < platformCount; i++) {
+    /* Corrigido: desenha tambem a plataforma 0, o chao. */
+    for (i = 0; i < platformCount; i++) {
         float x = platforms[i].x - cameraX;
 
         if (x > -platforms[i].w && x < SW) {
@@ -695,13 +732,13 @@ static void giveXP(int amount)
         level++;
         upgradePoints++;
 
-        /* Bonus de 50 XP por nivel */
         xp += 50;
         nextXP = 100 + level * 25;
     }
 
     if (level >= MAX_LEVEL) {
         level = MAX_LEVEL;
+
         if (xp >= nextXP)
             xp = nextXP - 1;
     }
@@ -799,7 +836,6 @@ static void drawUpgradeMenu(void)
 
 /* =====================================================
    PROTAGONISTA DESENHADO EM C
-   Sem PNG, JPG, GIF ou sprites externos.
    ===================================================== */
 
 #define HERO_OUTLINE 0xFF101018
@@ -819,19 +855,16 @@ static void heroRect(float x, float y, float w, float h, Color c)
 
 static void drawHeroHead(float x, float y, int frame)
 {
-    /* Contorno e rosto */
     heroRect(x+4,y+1,13,12,HERO_OUTLINE);
     heroRect(x+5,y+2,11,10,HERO_SKIN);
     heroRect(x+4,y+2,3,5,HERO_HAIR);
     heroRect(x+7,y,9,3,HERO_HAIR);
     heroRect(x+13,y+2,5,4,HERO_HAIR);
 
-    /* Franja */
     heroRect(x+5,y+1,4,5,HERO_HAIR);
     heroRect(x+8,y+2,4,4,HERO_HAIR);
     heroRect(x+11,y+1,3,5,HERO_HAIR);
 
-    /* Olhos vermelhos */
     if (playerFacing > 0) {
         heroRect(x+13,y+6,3,2,HERO_EYE);
         heroRect(x+15,y+6,1,2,HERO_WHITE);
@@ -840,10 +873,8 @@ static void drawHeroHead(float x, float y, int frame)
         heroRect(x+6,y+6,1,2,HERO_WHITE);
     }
 
-    /* Sombra do rosto */
     heroRect(x+7,y+10,7,1,0xFFB58F80);
 
-    /* Mechas que se movem durante a corrida */
     if (frame == 1) {
         heroRect(x+1,y+3,5,3,HERO_HAIR);
         heroRect(x+2,y+6,4,2,HERO_HAIR);
@@ -855,20 +886,15 @@ static void drawHeroHead(float x, float y, int frame)
 
 static void drawHeroBody(float x, float y, int frame)
 {
-    /* Casaco preto */
     heroRect(x+3,y,14,12,HERO_OUTLINE);
     heroRect(x+5,y+1,10,10,HERO_CLOTH);
     heroRect(x+4,y+2,3,8,HERO_CLOTH2);
     heroRect(x+13,y+2,3,8,HERO_CLOTH2);
 
-    /* Gola vermelha */
     heroRect(x+7,y,6,3,HERO_RED);
     heroRect(x+8,y+3,4,2,HERO_RED2);
-
-    /* Linha vermelha central */
     heroRect(x+9,y+4,2,6,HERO_RED);
 
-    /* Braços animados */
     if (frame == 1) {
         heroRect(x+1,y+2,4,7,HERO_CLOTH);
         heroRect(x+15,y+4,5,5,HERO_CLOTH);
@@ -889,7 +915,6 @@ static void drawHeroBody(float x, float y, int frame)
 
 static void drawHeroLegs(float x, float y, int frame)
 {
-    /* Calcas escuras */
     if (frame == 1) {
         heroRect(x+5,y,5,7,HERO_CLOTH);
         heroRect(x+11,y+1,5,6,HERO_CLOTH2);
@@ -924,19 +949,12 @@ static void drawPlayer(void)
     else
         frame = 0;
 
-    /* Sombra no chao */
     rect(x-2,y+PLAYER_H,23,2,DARK);
 
-    /*
-     * Personagem de 19x30 pixels:
-     * cabelo preto, olhos vermelhos, roupa escura
-     * e detalhes vermelhos e brancos.
-     */
     drawHeroHead(x,y,frame);
     drawHeroBody(x,y+12,frame);
     drawHeroLegs(x,y+21,frame);
 
-    /* Efeito de dash */
     if (dashFrames > 0) {
         if (playerFacing > 0) {
             rect(x-8,y+8,7,3,HERO_RED);
@@ -1165,6 +1183,8 @@ static void startBoss(void)
 {
     int idx = bossIndex();
 
+    bossActive = 0;
+
     if (idx < 0 || bossDefeated[idx])
         return;
 
@@ -1172,7 +1192,7 @@ static void startBoss(void)
     bossMaxHP = 100 + zone*50;
     bossHP = bossMaxHP;
     bossX = (zone == 5) ? 780 : 1300;
-    bossY = 350;
+    bossY = GROUND - 60;
     bossTimer = 0;
     bossPhase = 0;
 }
@@ -1238,7 +1258,6 @@ static void updatePlayer(SceCtrlData *pad)
     int i;
     unsigned int b = pad->Buttons;
     float oldY = playerY;
-    float oldX = playerX;
 
     if (dashFrames > 0) {
         playerX += playerFacing * 9;
@@ -1305,7 +1324,7 @@ static void updatePlayer(SceCtrlData *pad)
         }
     }
 
-    /* Impede atravessar o teto das plataformas ao subir. */
+    /* Colisao com o lado inferior das plataformas. */
     if (velocityY < 0) {
         for (i=0; i<platformCount; i++) {
             Platform *p = &platforms[i];
@@ -1324,7 +1343,11 @@ static void updatePlayer(SceCtrlData *pad)
         playerX = 40;
         playerY = GROUND-PLAYER_H;
         velocityY = 0;
-        if (hp > 0) hp--;
+
+        if (hp > 0)
+            hp--;
+
+        invulnerability = 45;
     }
 
     if (zone == 0 && !magicTaken &&
@@ -1335,21 +1358,13 @@ static void updatePlayer(SceCtrlData *pad)
         giveXP(25);
     }
 
-    /*
-     * Habilidades:
-     * Pulo duplo liberado ao chegar na Floresta.
-     * Dash liberado ao chegar na Cidade.
-     */
     if (zone >= 1)
         doubleJumpUnlocked = 1;
 
     if (zone >= 2)
         dashUnlocked = 1;
 
-    /* Mantem a camera seguindo o jogador. */
     cameraX = clampf(playerX-220,0,WORLD_W-SW);
-
-    (void)oldX;
 }
 
 /* =====================================================
@@ -1383,6 +1398,21 @@ static void changeZone(int direction)
 
     bossActive = 0;
     startBoss();
+}
+
+/*
+ * Progressao normal:
+ * - Ao chegar ao limite direito, entra na proxima zona.
+ * - Ao chegar ao limite esquerdo, retorna a zona anterior.
+ * - L continua disponivel para teste.
+ */
+static void checkZoneExit(void)
+{
+    if (playerX >= WORLD_W-PLAYER_W-2 && zone < 5) {
+        changeZone(1);
+    } else if (playerX <= 1 && zone > 0) {
+        changeZone(-1);
+    }
 }
 
 /* =====================================================
@@ -1472,6 +1502,14 @@ static void newGame(void)
     buildPlatforms();
     spawnEnemies();
 
+    startBoss();
+
+    /*
+     * Evita que o botao que iniciou o jogo
+     * seja interpretado novamente no primeiro quadro.
+     */
+    previousButtons = 0;
+
     gameStarted = 1;
     menuMode = 1;
 }
@@ -1553,38 +1591,47 @@ int main(void)
             if (pressed(b,PSP_CTRL_SELECT))
                 menuMode = 0;
 
-            updatePlayer(&pad);
-            updateEnemies();
-            updateShots();
-            updateBoss();
-
-            /* L: zona anterior para testes. */
-            if (pressed(b,PSP_CTRL_LTRIGGER))
-                changeZone(-1);
-
             /*
-             * R: antes do desbloqueio, muda de zona.
-             * Depois do desbloqueio, executa o dash.
+             * So atualiza a partida se continuar no modo jogo.
              */
-            if (pressed(b,PSP_CTRL_RTRIGGER)) {
-                if (dashUnlocked) {
-                    if (dashCooldown == 0) {
-                        dashFrames = 8;
-                        dashCooldown = 45;
-                        invulnerability = 10;
-                    }
-                } else {
-                    changeZone(1);
-                }
-            }
+            if (menuMode == 1) {
+                updatePlayer(&pad);
+                updateEnemies();
+                updateShots();
+                updateBoss();
 
-            if (hp <= 0) {
-                hp = maxHP;
-                playerX = 40;
-                playerY = GROUND-PLAYER_H;
-                velocityY = 0;
-                cameraX = 0;
-                invulnerability = 60;
+                /* L: zona anterior para testes. */
+                if (pressed(b,PSP_CTRL_LTRIGGER))
+                    changeZone(-1);
+
+                /*
+                 * R executa dash quando desbloqueado.
+                 * Antes do dash, continua como atalho de teste.
+                 */
+                if (pressed(b,PSP_CTRL_RTRIGGER)) {
+                    if (dashUnlocked) {
+                        if (dashCooldown == 0) {
+                            dashFrames = 8;
+                            dashCooldown = 45;
+                            invulnerability = 10;
+                        }
+                    } else {
+                        changeZone(1);
+                    }
+                }
+
+                checkZoneExit();
+
+                if (hp <= 0) {
+                    hp = maxHP;
+                    playerX = 40;
+                    playerY = GROUND-PLAYER_H;
+                    velocityY = 0;
+                    cameraX = 0;
+                    invulnerability = 60;
+                    dashFrames = 0;
+                    dashCooldown = 0;
+                }
             }
         }
 
