@@ -317,8 +317,8 @@ int main(void){
  sceCtrlSetSamplingCycle(0);sceCtrlSetSamplingMode(PSP_CTRL_MODE_ANALOG);
  sceGuInit();sceGuStart(GU_DIRECT,list);
  sceGuDrawBuffer(GU_PSM_8888,(void*)0,512);
- sceGuDispBuffer(SW,SH,(void*)0x44000000,512);
- sceGuDepthBuffer((void*)0x44088000,512);
+ sceGuDispBuffer(SW,SH,(void*)0x88000,512);
+ sceGuDepthBuffer((void*)0x110000,512);
  sceGuOffset(2048-SW/2,2048-SH/2);sceGuViewport(2048,2048,SW,SH);
  sceGuDepthRange(65535,0);sceGuScissor(0,0,SW,SH);sceGuEnable(GU_SCISSOR_TEST);
  sceGuDisable(GU_DEPTH_TEST);sceGuFinish();sceGuSync(0,0);sceDisplayWaitVblankStart();sceGuDisplay(GU_TRUE);
