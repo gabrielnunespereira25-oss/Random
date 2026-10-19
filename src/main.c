@@ -239,31 +239,30 @@ static void drawRect(
     int h,
     unsigned int color
 ) {
+    struct RectVertex {
+        unsigned int color;
+        float x;
+        float y;
+        float z;
+    };
+
+    struct RectVertex vertices[2];
+
     if (w <= 0 || h <= 0)
         return;
 
-    sceGuColor(color);
+    vertices[0].color = color;
+    vertices[0].x = (float)x;
+    vertices[0].y = (float)y;
+    vertices[0].z = 0.0f;
+
+    vertices[1].color = color;
+    vertices[1].x = (float)(x + w);
+    vertices[1].y = (float)(y + h);
+    vertices[1].z = 0.0f;
 
     sceGuDisable(GU_TEXTURE_2D);
-
-    ScePspIMVertex vertices[2] = {
-        {
-            .u = 0,
-            .v = 0,
-            .color = color,
-            .x = (float)x,
-            .y = (float)y,
-            .z = 0
-        },
-        {
-            .u = 0,
-            .v = 0,
-            .color = color,
-            .x = (float)(x + w),
-            .y = (float)(y + h),
-            .z = 0
-        }
-    };
+    sceGuColor(color);
 
     sceGuDrawArray(
         GU_SPRITES,
@@ -277,6 +276,7 @@ static void drawRect(
 }
 
 static void drawTriangle(
+
     float x1,
     float y1,
     float x2,
