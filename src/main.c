@@ -25,8 +25,8 @@ PSP_MAIN_THREAD_ATTR(THREAD_ATTR_USER);
 #define SH 272
 #define WW 1600
 #define GROUND 250
-#define PW 24
-#define PH 48
+#define PW 18
+#define PH 30
 #define CAVE 0
 #define FOREST 1
 #define CITY 2
@@ -56,22 +56,22 @@ static unsigned int __attribute__((aligned(16))) list[262144];
 #define SKIN   0xFF70B8E8
 
 static int zone=CAVE, paused=0, face=1, grounded=1, jumps=2, swordCD=0;
-static float cam=0, px=60, py=GROUND-48, vy=0;
+static float cam=0, px=60, py=220, vy=0;
 static int hp=5,maxHP=5, magic=0, magicCD=0;
 static int xp=0, level=1, nextXP=20, points=0;
 static int magicPower=1, swordDamage=1, speedLevel=1, defense=0, selected=0;
 static int cpZone=CAVE, cpReached[6]={0,0,0,0,0,0};
-static float cpX=60,cpY=GROUND-48;
+static float cpX=60,cpY=220;
 static int zoneBossHP[ZONE_COUNT]={12,16,20,24,28,40};
 static int zoneBossMax[ZONE_COUNT]={12,16,20,24,28,40};
 
 typedef struct { float x,y,min,max,speed; int alive,hp,cd; } Mob;
 static Mob mobs[N_MOBS]={
- {300,GROUND-40,250,380,.8f,1,3,0},{610,GROUND-40,550,680,1,1,3,0},
- {960,GROUND-40,900,1040,.9f,1,3,0},{1190,GROUND-40,1150,1250,1.1f,1,3,0}
+ {300,220,250,380,.8f,1,1,0},{610,220,550,680,1,1,1,0},
+ {960,220,900,1040,.9f,1,1,0},{1190,220,1150,1250,1.1f,1,1,0}
 };
 static struct {float x,y,vy;int grounded,timer,active,hp,cd;} boss=
- {1350,GROUND-144,0,1,50,1,40,0};
+ {1350,218,0,1,50,1,12,0};
 typedef struct {int on;float x,y,vx;} Shot;
 static Shot shots[8];
 
@@ -193,73 +193,19 @@ static void drawOtherZone(void){
  else {rect(0,0,SW,SH,0xFF140D22);wr(0,GROUND,WW,22,PURPLE);wr(0,GROUND+22,WW,20,DARK);for(int x=80;x<WW;x+=160){wr(x,GROUND-8,4,8,YELLOW);}wr(650,185,180,10,PURPLE);wr(1020,155,150,10,PURPLE);wr(250,70,12,180,PURPLE);wr(1330,70,12,180,PURPLE);wr(265,70,1065,8,STONE);}
 }
 static void drawPlayer(void){
- float x=px-cam, y=py;
- /* Bainha nas costas, corpo humanoide e detalhes desenhados em C. */
- rect(x-3,y+13,5,24,DARK); rect(x-2,y+12,3,22,STONE);
- /* cabelo */
- rect(x+5,y+1,16,6,WHITE); tri(x+5,y+6,x+2,y+1,x+9,y+4,WHITE);
- tri(x+14,y+5,x+18,y-2,x+19,y+6,WHITE);
- /* cabeça e rosto */
- rect(x+6,y+5,14,14,LIGHT); rect(x+7,y+8,12,7,GRAY);
- rect(x+15,y+9,3,2,BLACK); rect(x+7,y+15,12,3,WHITE);
- /* pescoço, camisa e faixa */
- rect(x+10,y+18,7,4,GRAY); rect(x+5,y+21,17,15,WHITE);
- rect(x+5,y+22,4,13,LIGHT); rect(x+18,y+22,4,13,GRAY);
- rect(x+10,y+23,3,10,STONE); rect(x+5,y+34,17,3,DARK);
- /* braços */
- rect(x+1,y+22,5,14,LIGHT); rect(x+21,y+22,5,13,GRAY);
- rect(x+1,y+34,5,4,WHITE); rect(x+21,y+33,5,4,LIGHT);
- /* pernas e botas */
- rect(x+7,y+37,6,8,GRAY); rect(x+15,y+37,6,8,STONE);
- rect(x+5,y+44,8,4,WHITE); rect(x+15,y+44,8,4,WHITE);
- /* katana na mão durante ataque / pronta junto ao corpo */
- rect(face?x+25:x-7,y+27,3,12,DARK);
- rect(face?x+26:x-8,y+20,2,9,LIGHT);
- /* HUD de vida */
- rect(8,8,80,7,DARK); rect(9,9,78.0f*hp/(maxHP?maxHP:1),5,RED);
-}
-static void drawZombie(float x,float y,int type){
- /* Zumbi humanoide cinza, sem casaco. Cada tipo tem proporções próprias. */
- float h=(type==2)?56.0f:40.0f, w=(type==2)?30.0f:20.0f;
- Color skin=(type==2)?STONE:GRAY;
- rect(x+4,y+2,w-8,10,skin); rect(x+2,y+5,3,7,DARK);
- rect(x+w-5,y+5,3,7,DARK); rect(x+5,y+7,3,2,BLACK);rect(x+w-8,y+7,3,2,BLACK);
- rect(x+4,y+12,w-8,3,DARK); /* boca rasgada, sem sorriso */
- rect(x+3,y+15,w-6,(type==2)?22:14,skin);
- rect(x+1,y+16,4,13,GRAY);rect(x+w-5,y+16,4,13,GRAY);
- rect(x+3,y+27,w-6,3,DARK); /* camiseta rasgada */
- rect(x+4,y+30,w-8,(type==2)?12:7,STONE);
- rect(x+4,y+h-10,5,8,DARK);rect(x+w-9,y+h-10,5,8,DARK);
- rect(x+2,y+h-3,8,3,BLACK);rect(x+w-10,y+h-3,8,3,BLACK);
- if(type==1){ /* corredor: braços estendidos */
-   rect(x-5,y+16,8,4,GRAY);rect(x+w-3,y+17,9,4,GRAY);
- }
-}
-static void drawGolem(void){
- float x=boss.x-cam,y=boss.y;
- /* 144 px de altura: três vezes a altura visual do player */
- tri(x+8,y+24,x+17,y+1,x+28,y+23,STONE);
- tri(x+75,y+23,x+86,y+1,x+96,y+24,STONE);
- rect(x+14,y+17,76,27,GRAY);rect(x+19,y+22,66,18,STONE);
- rect(x+26,y+27,13,4,BLACK);rect(x+65,y+27,13,4,BLACK);
- rect(x+43,y+25,18,25,DARK); /* fenda vertical, sem boca sorridente */
- rect(x+9,y+45,86,40,STONE);rect(x+16,y+49,72,31,GRAY);
- rect(x+20,y+54,12,4,DARK);rect(x+70,y+61,12,4,DARK);
- rect(x+3,y+48,18,49,GRAY);rect(x+83,y+48,18,49,GRAY);
- rect(x,y+62,21,26,STONE);rect(x+83,y+62,21,26,STONE);
- rect(x+21,y+84,62,36,GRAY);rect(x+28,y+90,48,24,STONE);
- rect(x+27,y+119,20,20,GRAY);rect(x+58,y+119,20,20,GRAY);
- rect(x+23,y+137,25,7,DARK);rect(x+57,y+137,25,7,DARK);
- /* rachaduras */
- tri(x+29,y+49,x+36,y+59,x+32,y+68,DARK);tri(x+75,y+83,x+67,y+94,x+77,y+103,DARK);
- rect(345,8,125,7,DARK);rect(346,9,123.0f*boss.hp/(float)(zoneBossMax[zone]?zoneBossMax[zone]:1),5,RED);
+ float x=px-cam;rect(x+4,py+2,10,12,SKIN);rect(x+2,py+13,14,13,BLUE);
+ rect(x,py+25,7,5,BROWN);rect(x+11,py+25,7,5,BROWN);
+ rect(x+(face?13:-7),py+15,12,3,LIGHT);
+ rect(8,8,80,7,DARK);rect(9,9,78.0f*hp/(maxHP?maxHP:1),5,RED);
 }
 static void drawMobs(void){
  for(int i=0;i<N_MOBS;i++)if(mobs[i].alive){
-   int type=(i==1)?1:((i==3)?2:0);
-   drawZombie(mobs[i].x-cam,mobs[i].y,type);
+  wr(mobs[i].x,mobs[i].y,20,25,RED);wr(mobs[i].x+4,mobs[i].y+5,4,4,WHITE);wr(mobs[i].x+13,mobs[i].y+5,4,4,WHITE);
  }
- if(boss.active)drawGolem();
+ if(boss.active){
+  wr(boss.x,boss.y,36,32,PURPLE);wr(boss.x+5,boss.y+7,7,6,YELLOW);wr(boss.x+23,boss.y+7,7,6,YELLOW);
+  rect(345,8,125,7,DARK);rect(346,9,123.0f*boss.hp/(float)(zoneBossMax[zone]?zoneBossMax[zone]:1),5,RED);
+ }
 }
 static void drawCheckpoints(void){
  float xs[3]={520,1050,800};int zs[3]={CAVE,CAVE,FOREST};
@@ -293,10 +239,10 @@ static void updateShots(void){
   shots[i].x+=shots[i].vx;if(shots[i].x<0||shots[i].x>WW)shots[i].on=0;
   if(zone>=ZONE_COUNT)continue;
   Box s={shots[i].x,shots[i].y,9,7};
-  for(int m=0;m<N_MOBS;m++)if(mobs[m].alive&&hit(s,(Box){mobs[m].x,mobs[m].y,(m==3)?30:20,(m==3)?56:40})){
+  for(int m=0;m<N_MOBS;m++)if(mobs[m].alive&&hit(s,(Box){mobs[m].x,mobs[m].y,20,25})){
    mobs[m].hp-=magicPower;shots[i].on=0;if(mobs[m].hp<=0){mobs[m].alive=0;addXP(5);}break;
   }
-  if(shots[i].on&&boss.active&&hit(s,(Box){boss.x,boss.y,104,144})){
+  if(shots[i].on&&boss.active&&hit(s,(Box){boss.x,boss.y,36,32})){
    boss.hp-=magicPower;shots[i].on=0;if(boss.hp<=0){boss.active=0;addXP(50);}
   }
  }
@@ -305,41 +251,41 @@ static void updateMobs(void){
  for(int i=0;i<N_MOBS;i++)if(mobs[i].alive){
   mobs[i].x+=mobs[i].speed;if(mobs[i].x<mobs[i].min||mobs[i].x>mobs[i].max)mobs[i].speed=-mobs[i].speed;
   if(mobs[i].cd>0)mobs[i].cd--;
-  if(hit(pbox(),(Box){mobs[i].x,mobs[i].y,(i==3)?30:20,(i==3)?56:40})&&!mobs[i].cd){hp-=damage();mobs[i].cd=35;}
+  if(hit(pbox(),(Box){mobs[i].x,mobs[i].y,20,25})&&!mobs[i].cd){hp-=damage();mobs[i].cd=35;}
  }
  if(boss.active){
   if(boss.cd>0)boss.cd--;
   if(boss.grounded&&fabsf(px-boss.x)<300&&boss.timer<=0){boss.vy=-6;boss.grounded=0;boss.timer=70;}
   if(boss.timer>0)boss.timer--;
   boss.vy+=.25f;boss.y+=boss.vy;
-  if(boss.y>=GROUND-144){boss.y=GROUND-144;boss.vy=0;boss.grounded=1;}
+  if(boss.y>=218){boss.y=218;boss.vy=0;boss.grounded=1;}
   if(px<boss.x)boss.x-=.5f;else boss.x+=.5f;
   if(boss.x<1300)boss.x=1300;if(boss.x>1410)boss.x=1410;
-  if(hit(pbox(),(Box){boss.x,boss.y,104,144})&&!boss.cd){hp-=damage();boss.cd=45;}
+  if(hit(pbox(),(Box){boss.x,boss.y,36,32})&&!boss.cd){hp-=damage();boss.cd=45;}
  }
 }
 static void sword(int down){
  static int was=0;if(!down){was=0;return;}if(was||swordCD>0)return;was=1;swordCD=14;
  Box a={px+(face?PW:-24),py+5,24,20};
- for(int i=0;i<N_MOBS;i++)if(mobs[i].alive&&hit(a,(Box){mobs[i].x,mobs[i].y,(i==3)?30:20,(i==3)?56:40})){
+ for(int i=0;i<N_MOBS;i++)if(mobs[i].alive&&hit(a,(Box){mobs[i].x,mobs[i].y,20,25})){
   mobs[i].hp-=swordDamage;if(mobs[i].hp<=0){mobs[i].alive=0;addXP(5);}
  }
- if(boss.active&&!boss.cd&&hit(a,(Box){boss.x,boss.y,104,144})){
+ if(boss.active&&!boss.cd&&hit(a,(Box){boss.x,boss.y,36,32})){
   boss.hp-=swordDamage;boss.cd=12;if(boss.hp<=0){boss.active=0;addXP(50);}
  }
 }
 static void checkpoints(void){
  float xs[3]={520,1050,800};int zs[3]={CAVE,CAVE,FOREST};
  for(int i=0;i<3;i++)if(zs[i]==zone&&hit(pbox(),(Box){xs[i],190,22,60})){
-  cpZone=zone;cpX=xs[i]-10;cpY=GROUND-PH;cpReached[i]=1;
+  cpZone=zone;cpX=xs[i]-10;cpY=220;cpReached[i]=1;
  }
 }
 static void changeZone(int nz,float nx,float ny){
  if(nz<0||nz>=ZONE_COUNT)return;
  zone=nz;px=nx;py=ny;vy=0;grounded=1;jumps=2;
  for(int i=0;i<8;i++)shots[i].on=0;
- for(int i=0;i<N_MOBS;i++){mobs[i].alive=1;mobs[i].hp=3+(zone/2);mobs[i].x=280.0f+i*300;mobs[i].y=GROUND-40;mobs[i].min=mobs[i].x-45;mobs[i].max=mobs[i].x+45;mobs[i].speed=.7f+i*.12f;mobs[i].cd=0;}
- boss.active=1;boss.hp=zoneBossHP[zone];boss.x=1320;boss.y=GROUND-144;boss.vy=0;boss.grounded=1;boss.timer=45;boss.cd=0;
+ for(int i=0;i<N_MOBS;i++){mobs[i].alive=1;mobs[i].hp=1+(zone/2);mobs[i].x=280.0f+i*300;mobs[i].y=220;mobs[i].min=mobs[i].x-45;mobs[i].max=mobs[i].x+45;mobs[i].speed=.7f+i*.12f;mobs[i].cd=0;}
+ boss.active=1;boss.hp=zoneBossHP[zone];boss.x=1320;boss.y=218;boss.vy=0;boss.grounded=1;boss.timer=45;boss.cd=0;
 }
 static void transition(void){
  if(px>=WW-PW-2 && zone<ARENA && !boss.active)changeZone(zone+1,35,GROUND-PH);
