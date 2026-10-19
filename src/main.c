@@ -1,5 +1,5 @@
 /*
-RANDOM - prototipo PSP em um arquivo (src/main.c)
+RANDOM ALPHA - mapa detalhado integrado ao prototipo PSP (src/main.c)
 CONTROLES:
 Direcional/analógico = mover
 X = pular / pulo duplo
@@ -83,6 +83,63 @@ static void rect(float x,float y,float w,float h,Color c){
  sceGuDrawArray(GU_SPRITES,GU_COLOR_8888|GU_VERTEX_32BITF|GU_TRANSFORM_2D,2,0,v);
 }
 static void wr(float x,float y,float w,float h,Color c){rect(x-cam,y,w,h,c);}
+static void tri(float x1,float y1,float x2,float y2,float x3,float y3,Color c){
+ Vtx *v=(Vtx*)sceGuGetMemory(3*sizeof(Vtx));
+ v[0]=(Vtx){c,x1-cam,y1,0}; v[1]=(Vtx){c,x2-cam,y2,0}; v[2]=(Vtx){c,x3-cam,y3,0};
+ sceGuDrawArray(GU_TRIANGLES,GU_COLOR_8888|GU_VERTEX_32BITF|GU_TRANSFORM_2D,3,0,v);
+}
+static void arch(float x,float y,float w,float h){
+ wr(x,y,10,h,STONE); wr(x+w-10,y,10,h,STONE); wr(x,y,w,8,GRAY);
+ tri(x-4,y+8,x+5,y-8,x+14,y+8,LIGHT); tri(x+w-14,y+8,x+w-5,y-8,x+w+4,y+8,LIGHT);
+}
+static void rubble(float x,float y,float z){
+ tri(x,y+z,x+z*.4f,y,x+z,y+z,DARK); wr(x+z*.25f,y+z*.65f,z*.6f,z*.2f,GRAY);
+}
+static void crystal(float x,float y,float z){
+ tri(x,y+z,x+z*.5f,y,x+z,y+z,LIGHT);
+ tri(x+z*.5f,y,x+z,y+z,x+z*.5f,y+z*1.35f,WHITE);
+ tri(x,y+z,x+z*.5f,y+z*1.35f,x+z*.5f,y,GRAY);
+}
+static void gate(float x,float y,float w,float h){
+ wr(x,y,8,h,DARK); wr(x+w-8,y,8,h,DARK); wr(x,y,w,8,GRAY);
+ for(int i=0;i<6;i++)wr(x+14+i*((w-28)/6),y+12,3,h-14,STONE);
+}
+static void drawExtraArchitecture(void){
+ int i;
+ if(zone==CAVE){
+  for(i=0;i<30;i++){float x=i*53.0f;tri(x,0,x+9,18+(i%5)*8,x+18,0,GRAY);}
+  for(i=0;i<17;i++){float x=i*98.0f;wr(x,95+(i%4)*20,7,100,DARK);wr(x+12,175+(i%3)*16,5,65,STONE);}
+  crystal(310,GROUND-53,20);crystal(650,GROUND-55,24);crystal(1030,GROUND-52,18);
+  arch(25,GROUND-105,75,105);gate(1490,GROUND-110,75,110);
+  wr(1190,GROUND-55,270,55,DARK);wr(1190,GROUND-55,270,4,LIGHT);
+  for(i=0;i<7;i++)wr(1210+i*35,GROUND-40,4,25,GRAY);
+ } else if(zone==FOREST){
+  for(i=0;i<18;i++){float x=i*92.0f+10;wr(x,GROUND-80-(i%4)*10,10,80+(i%4)*10,DARK);
+   tri(x-28,GROUND-70-(i%4)*10,x+5,GROUND-145-(i%3)*10,x+40,GROUND-70-(i%4)*10,DGREEN);
+   tri(x-20,GROUND-100,x+5,GROUND-165,x+32,GROUND-100,DGREEN);}
+  wr(1120,GROUND-110,360,110,DARK);wr(1120,GROUND-110,360,5,LIGHT);
+  crystal(1288,GROUND-195,20);gate(1125,GROUND-215,75,105);
+ } else if(zone==CITY){
+  for(i=0;i<22;i++){float x=i*75.0f,h=85+(i%5)*23;wr(x,GROUND-h,55,h,DARK);wr(x+5,GROUND-h+12,45,4,STONE);
+   wr(x+12,GROUND-h+28,8,15,GRAY);wr(x+33,GROUND-h+28,8,15,GRAY);}
+  for(i=0;i<12;i++)rubble(i*125.0f+20,GROUND-35,32+(i%3)*7);
+  for(i=0;i<5;i++){float x=230+i*280.0f;wr(x,GROUND-80,5,80,GRAY);wr(x-14,GROUND-80,34,12,STONE);}
+ } else if(zone==CASTLE){
+  for(i=0;i<9;i++){float x=i*180.0f+20;arch(x,145+(i%2)*20,110,GROUND-145-(i%2)*20);if(i%2==0){wr(x-20,GROUND-150,24,150,DARK);wr(x-25,GROUND-150,34,7,GRAY);}}
+  wr(0,250,WW,12,DARK);for(i=0;i<6;i++){float x=120+i*260.0f;wr(x,95,4,100,GRAY);tri(x+4,100,x+52,112,x+4,145,STONE);}
+  wr(1120,GROUND-110,360,110,DARK);wr(1120,GROUND-110,360,6,LIGHT);gate(1125,GROUND-215,75,105);
+ } else if(zone==TOWER){
+  wr(0,0,48,SH,DARK);wr(WW-48,0,48,SH,DARK);
+  for(i=0;i<12;i++){float x=100+i*125.0f,y=25+(i%3)*18;wr(x,y,24,GROUND-y,DARK);wr(x-5,y,34,7,GRAY);tri(x-3,y,x+12,y-18,x+27,y,LIGHT);}
+  wr(1120,GROUND-110,360,110,DARK);wr(1120,GROUND-110,360,5,WHITE);gate(1125,GROUND-215,75,105);crystal(1280,GROUND-220,24);
+ } else {
+  for(i=0;i<18;i++){float x=i*95.0f;tri(x,GROUND,x+45,GROUND-95-(i%4)*15,x+95,GROUND,DARK);}
+  wr(590,GROUND-110,420,110,DARK);wr(590,GROUND-110,420,6,WHITE);wr(610,GROUND-95,380,4,STONE);
+  for(i=0;i<6;i++){float x=615+i*72.0f;wr(x,GROUND-180,16,70,GRAY);wr(x-5,GROUND-188,26,8,LIGHT);}
+  wr(730,GROUND-122,140,12,STONE);wr(745,GROUND-135,110,13,LIGHT);tri(750,GROUND-155,800,GROUND-210,850,GROUND-155,WHITE);
+  gate(605,GROUND-215,75,105);gate(915,GROUND-215,75,105);
+ }
+}
 static int hit(Box a,Box b){return a.x<b.x+b.w&&a.x+a.w>b.x&&a.y<b.y+b.h&&a.y+a.h>b.y;}
 static Box pbox(void){return (Box){px,py,PW,PH};}
 static void addXP(int n){
@@ -155,6 +212,8 @@ static void drawCheckpoints(void){
  for(int i=0;i<3;i++)if(zs[i]==zone){wr(xs[i],192,4,28,GRAY);wr(xs[i]+4,192,15,10,cpReached[i]?GREEN:YELLOW);}
 }
 static void drawHUD(void){
+ /* Marcador visual de zona: seis segmentos, o ativo fica claro. */
+ for(int zi=0;zi<ZONE_COUNT;zi++)rect(300+zi*22,8,16,5,zi==zone?WHITE:STONE);
  rect(8,20,80,5,DARK);rect(9,21,78.0f*xp/nextXP,3,YELLOW);
  rect(8,29,points?40:8,4,points?GREEN:GRAY);
  Color colors[5]={RED,PURPLE,YELLOW,GREEN,BLUE};
@@ -166,6 +225,7 @@ static void draw(void){
  sceGuStart(GU_DIRECT,list);sceGuClearColor(BLACK);sceGuClear(GU_COLOR_BUFFER_BIT|GU_DEPTH_BUFFER_BIT);
  sceGuDisable(GU_DEPTH_TEST);sceGuDisable(GU_TEXTURE_2D);
  if(zone==CAVE)drawCave();else if(zone==FOREST)drawForest();else drawOtherZone();
+ drawExtraArchitecture();
  drawCheckpoints();drawMobs();
  for(int i=0;i<8;i++)if(shots[i].on)wr(shots[i].x,shots[i].y,9,7,PURPLE);
  drawPlayer();drawHUD();sceGuFinish();sceGuSync(0,0);sceDisplayWaitVblankStart();sceGuSwapBuffers();
