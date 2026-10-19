@@ -131,123 +131,154 @@ static void playerUpdate(Player *p, float dt, unsigned int buttons)
         p->anim = IDLE;
 }
 
+
 static void playerDraw(Player *p, float camX, float camY)
 {
-    float x = p->x-camX, y = p->y-camY;
-    float t = p->time, d = (float)p->facing;
-    float run = p->anim == RUN;
-    float jump = p->anim == JUMP;
-    float fall = p->anim == FALL;
-    float land = p->anim == LAND;
-    float climb = p->anim == CLIMB;
-    float attack = p->anim == ATTACK;
+    float x = p->x - camX;
+    float y = p->y - camY;
+    float t = p->time;
+    float d = (float)p->facing;
 
-    float stride = sinf(t*12)*run;
-    float swing = sinf(t*12+PI)*run;
-    float bob = fabsf(sinf(t*12))*3*run;
-    float bx = x+d*(7*run+4*attack)*.3f;
-    float by = y-bob+7*land-5*jump;
+    int walking = (p->anim == RUN);
+    int idle = (p->anim == IDLE);
+
+    /* Passos mais lentos para caminhada */
+    float step = sinf(t * 7.0f) * walking;
+    float opposite = sinf(t * 7.0f + PI) * walking;
+
+    /* Inclinação constante durante a caminhada */
+    float lean = walking ? 9.0f : 2.0f;
+    float bob = fabsf(sinf(t * 7.0f)) * 2.0f * walking;
+    float bx = x + d * lean * 0.35f;
+    float by = y - bob;
 
     /* Sombra */
-    triangle(x-15,y+2,x+15,y+2,x,y+5,DARK);
+    triangle(x - 13, y + 2, x + 13, y + 2,
+             x, y + 5, DARK);
 
-    /* Alma do Negro: chama facetada e fragmentos animados */
-    {
-        float fx=bx+d*1.5f, fy=by-48;
-        shard(fx-5,fy+sinf(t*9)*2,10,GRAY,sinf(t*7)*2);
-        shard(fx+2,fy-5+sinf(t*8),14,WHITE,sinf(t*6)*3);
-        shard(fx+7,fy+1,7,WHITE,sinf(t*10)*2);
-        shard(fx-12,fy+7,5,GRAY,sinf(t*11));
-        shard(fx-16+sinf(t*4)*2,fy-12+sinf(t*5)*3,
-              3.5f,WHITE,0);
-        shard(fx+15+sinf(t*6)*2,fy-8+sinf(t*4)*3,
-              3,GRAY,0);
-    }
+    /* Alma do Negro balança com o movimento */
+    float fx = bx + d * 1.5f + sinf(t * 3.5f) * walking * 2.0f;
+    float fy = by - 48 + sinf(t * 7.0f) * walking * 2.0f;
 
-    /* Cabeça angular e olho */
-    quad(bx-8,by-43,bx+7,by-45,bx+10,by-32,
-         bx-5,by-29,DARK);
-    quad(bx+d,by-39,bx+d*7,by-40,bx+d*7,by-37,
-         bx+d,by-36,WHITE);
+    shard(fx - 5, fy, 10, GRAY, sinf(t * 5.0f) * 2.0f);
+    shard(fx + 2, fy - 5, 14, WHITE, sinf(t * 4.0f) * 3.0f);
+    shard(fx + 7, fy + 1, 7, WHITE, sinf(t * 8.0f) * 2.0f);
+    shard(fx - 12, fy + 7, 5, GRAY, sinf(t * 6.0f));
 
-    /* Pescoço e capa */
-    triangle(bx-5,by-31,bx+6,by-32,bx+2,by-24,GRAY);
-    triangle(bx-d*4,by-28,bx-d*24,by-24+stride*2,
-             bx-d*17,by-15,GRAY);
-    triangle(bx-d*3,by-25,bx-d*29,by-17+swing,
-             bx-d*14,by-12,DARK);
+    /* Cabeça inclinada para a frente */
+    quad(bx - 8, by - 43,
+         bx + 7, by - 45,
+         bx + 10 + d * 2, by - 32,
+         bx - 5 + d * 2, by - 29, DARK);
 
-    /* Tronco inclinado em facetas */
-    quad(bx-7,by-27,bx+7,by-25,bx+d*10,by-8,
-         bx-d*6,by-7,DARK);
-    triangle(bx-5,by-25,bx+3,by-24,bx-d,by-14,GRAY);
-    triangle(bx+3,by-23,bx+7,by-20,bx+d*7,by-10,BLACK);
+    /* Olho */
+    quad(bx + d * 1, by - 39,
+         bx + d * 7, by - 40,
+         bx + d * 7, by - 37,
+         bx + d * 1, by - 36, WHITE);
 
-    /* Braços articulados */
-    {
-        float sx=bx+d*5, sy=by-23;
-        float fx=sx+d*(8+swing*5);
-        float fy=sy+8-attack*9;
-        float rx=sx-d*(9+swing*4);
-        float ry=sy+7+swing*3;
+    /* Pescoço */
+    triangle(bx - 5, by - 31,
+             bx + 6, by - 32,
+             bx + 2, by - 24, GRAY);
 
-        if (jump) { fy-=8; ry-=5; }
-        if (climb) {
-            fx=sx+d*8; fy=sy-12;
-            rx=sx-d*8; ry=sy-9;
-        }
+    /* Capa arrastada para trás */
+    triangle(bx - d * 4, by - 28,
+             bx - d * 22, by - 24 + step * 2,
+             bx - d * 16, by - 15, GRAY);
 
-        triangle(sx,sy,fx,fy,fx-d*3,fy+5,GRAY);
-        triangle(fx,fy,fx+d*4,fy+2,fx+d*2,fy+6,WHITE);
-        triangle(sx-d*2,sy+1,rx,ry,rx-d*2,ry+5,DARK);
-        triangle(rx,ry,rx-d*3,ry+2,rx,ry+6,GRAY);
-    }
+    triangle(bx - d * 3, by - 25,
+             bx - d * 27, by - 17 + opposite * 2,
+             bx - d * 13, by - 12, DARK);
+
+    /* Tronco inclinado */
+    quad(bx - 7, by - 27,
+         bx + 7, by - 25,
+         bx + d * 10, by - 8,
+         bx - d * 6, by - 7, DARK);
+
+    triangle(bx - 5, by - 25,
+             bx + 3, by - 24,
+             bx - d, by - 14, GRAY);
+
+    /* Braços balançam em sentidos opostos */
+    float sx = bx + d * 5;
+    float sy = by - 23;
+
+    float arm1x = sx + d * (5 + opposite * 5);
+    float arm1y = sy + 9 + step * 2;
+
+    float arm2x = sx - d * (5 + step * 5);
+    float arm2y = sy + 8 + opposite * 2;
+
+    triangle(sx, sy, arm1x, arm1y,
+             arm1x - d * 3, arm1y + 5, GRAY);
+
+    triangle(arm1x, arm1y,
+             arm1x + d * 3, arm1y + 2,
+             arm1x + d * 2, arm1y + 6, WHITE);
+
+    triangle(sx - d * 2, sy + 1,
+             arm2x, arm2y,
+             arm2x - d * 2, arm2y + 5, DARK);
+
+    triangle(arm2x, arm2y,
+             arm2x - d * 3, arm2y + 2,
+             arm2x, arm2y + 6, GRAY);
 
     /* Quadril */
-    triangle(bx-6,by-10,bx+d*8,by-10,bx+d*5,by-3,DARK);
+    triangle(bx - 6, by - 10,
+             bx + d * 8, by - 10,
+             bx + d * 5, by - 3, DARK);
 
-    /* Pernas com passada alternada */
-    {
-        float hx=bx, hy=by-5;
-        float air=7*jump-5*fall;
+    /* Perna esquerda */
+    float hipX = bx;
+    float hipY = by - 5;
 
-        float lx=hx+d*(stride*8+air);
-        float ly=hy+10+fall*3;
-        float fx=lx+d*(5+stride*3);
-        float fy=y-1-jump*8+fall*2;
+    float lx = hipX + d * step * 7;
+    float ly = hipY + 10;
 
-        float rx=hx-d*(stride*8+air);
-        float ry=hy+10;
-        float tx=rx-d*(4-stride*3);
-        float ty=y-1-jump*2+fall*5;
+    triangle(hipX - d * 2, hipY,
+             lx, ly,
+             lx + d * 4, ly + 8, DARK);
 
-        triangle(hx-d*2,hy,rx,ry,rx+d*4,ry+8,DARK);
-        triangle(rx,ry,tx+d*2,ty-2,tx-d*3,ty+1,GRAY);
-        triangle(tx-d*5,ty,tx+d*4,ty,tx+d*3,ty+3,BLACK);
+    triangle(lx, ly,
+             lx + d * (4 + step * 3), y - 2,
+             lx + d * (9 + step * 3), y + 1, GRAY);
 
-        triangle(hx+d*2,hy,lx,ly,lx+d*5,ly+5,GRAY);
-        triangle(lx,ly,fx-d*2,fy-2,fx+d*3,fy+1,DARK);
-        triangle(fx-d*4,fy,fx+d*6,fy,fx+d*5,fy+3,WHITE);
+    /* Perna direita */
+    float rx = hipX - d * opposite * 7;
+    float ry = hipY + 10;
+
+    triangle(hipX + d * 2, hipY,
+             rx, ry,
+             rx - d * 4, ry + 8, GRAY);
+
+    triangle(rx, ry,
+             rx - d * (4 - opposite * 3), y - 2,
+             rx - d * (9 - opposite * 3), y + 1, DARK);
+
+    /* Pés angulares */
+    triangle(lx + d * step * 2, y - 1,
+             lx + d * (10 + step * 3), y - 1,
+             lx + d * (8 + step * 3), y + 2, WHITE);
+
+    triangle(rx - d * opposite * 2, y - 1,
+             rx - d * (10 - opposite * 3), y - 1,
+             rx - d * (8 - opposite * 3), y + 2, GRAY);
+
+    /* Pequenos fragmentos de movimento */
+    if (walking) {
+        shard(x - d * 20, y - 12 + sinf(t * 7), 2, GRAY, 0);
+        shard(x - d * 26, y - 7 + sinf(t * 6), 2, WHITE, 0);
     }
 
-    /* Rastro da corrida */
-    if (run) {
-        shard(x-d*22,y-17+sinf(t*15),3,GRAY,0);
-        shard(x-d*30,y-8+sinf(t*12),2,WHITE,0);
+    /* Quando parado, a alma continua viva */
+    if (idle) {
+        shard(fx + sinf(t * 2) * 3, fy - 12, 3, WHITE, 0);
     }
+}
 
-    /* Impacto ao aterrissar */
-    if (land) {
-        triangle(x-17,y+1,x-8,y-2,x-11,y+2,WHITE);
-        triangle(x+17,y+1,x+8,y-2,x+11,y+2,GRAY);
-    }
-
-    /* Golpe geométrico */
-    if (attack) {
-        triangle(x+d*13,by-23,x+d*31,by-13,
-                 x+d*18,by-8,WHITE);
-        triangle(x+d*18,by-30,x+d*35,by-21,
-                 x+d*25,by-17,GRAY);
     }
 }
 
