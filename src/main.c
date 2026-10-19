@@ -1,31 +1,23 @@
 
 /*
  * RANDOM
- * Jogo homebrew para PSP - PSPSDK
+ * Reconstrucao independente para PSP / PSPSDK
  *
- * ZONAS:
- * 0 - Caverna do Labirinto
- * 1 - Floresta Esquecida
+ * Controles:
+ * D-Pad esquerda/direita : mover
+ * X                      : pular
+ * Quadrado               : atacar
+ * Circulo                : magia
+ * Start                  : reiniciar
  *
- * RECURSOS:
- * - Duas zonas grandes
- * - Camera horizontal
- * - Plataformas com colisao
- * - Gravidade e pulo
- * - Espada com animacao de corte
- * - Magia com projeteis
- * - Inimigos e combate
- * - Golem com muita vida
- * - Barra de vida do jogador
- * - Barra de vida do chefe
- * - Efeitos desenhados em C
+ * Sistemas:
+ * - Labirinto de cavernas com salas e bifurcacoes
+ * - Personagem desenhado com linhas e curvas
+ * - Zumbis perseguidores
+ * - Boss com 500 HP
+ * - Vida, dano, magia, camera e colisoes
  *
- * CONTROLES:
- * Direcional esquerdo/direito: mover
- * X: pular
- * QUADRADO: espada
- * TRIANGULO: magia
- * START: sair
+ * Arquivo: src/main.c
  */
 
 #include <pspkernel.h>
@@ -34,1925 +26,994 @@
 #include <pspgu.h>
 #include <pspgum.h>
 #include <pspctrl.h>
-
 #include <math.h>
 #include <string.h>
 #include <stdlib.h>
 
-/* ---------------------------------------------------------
-   CONFIGURACAO
-   --------------------------------------------------------- */
-
 PSP_MODULE_INFO("RANDOM", 0, 1, 0);
 PSP_MAIN_THREAD_ATTR(THREAD_ATTR_USER);
 
-#define SW 480
-#define SH 272
+#define SCREEN_W 480
+#define SCREEN_H 272
 
-#define TILE 24
-#define FLOOR_Y 224
+#define WORLD_W 5200.0f
+#define FLOOR_Y 226.0f
 
-#define MAP_W 240
-#define WORLD_W (MAP_W * TILE)
+#define PLAYER_W 22.0f
+#define PLAYER_H 38.0f
 
-#define MAX_ENEMIES 10
-#define MAX_MAGIC 8
-#define MAX_PARTICLES 50
+#define ZOMBIE_MAX 10
+#define ROOM_COUNT 12
 
-#define PLAYER_SPEED 150.0f
-#define JUMP_POWER 310.0f
-#define GRAVITY 680.0f
+#define GRAVITY 650.0f
+#define MOVE_SPEED 150.0f
+#define JUMP_SPEED -300.0f
 
-#define ZONE_SPLIT 100
+#define COLOR(r,g,b,a) \
+    ((unsigned int)(r) | ((unsigned int)(g) << 8) | \
+    ((unsigned int)(b) << 16) | ((unsigned int)(a) << 24))
 
-/* ---------------------------------------------------------
-   GRAFICOS PSP
-   --------------------------------------------------------- */
-
-static unsigned int __attribute__((aligned(16))) list[262144];
-
-static unsigned int *fb0;
-static unsigned int *fb1;
-static unsigned int *zbuffer;
-
-/* ---------------------------------------------------------
-   ESTRUTURAS
-   --------------------------------------------------------- */
+#define BLACK COLOR(8, 8, 12, 255)
+#define WHITE COLOR(245, 245, 245, 255)
+#define RED COLOR(220, 45, 50, 255)
+#define GREEN COLOR(50, 220, 100, 255)
+#define GRAY COLOR(75, 78, 88, 255)
+#define DARK COLOR(22, 24, 32, 255)
+#define PURPLE COLOR(140, 65, 220, 255)
+#define GOLD COLOR(240, 190, 65, 255)
 
 typedef struct {
-    float x;
-    float y;
+    unsigned int color;
+    float x, y, z;
+} Vertex;
 
-    float vx;
-    float vy;
-
-    float w;
-    float h;
-
-    int hp;
-    int maxhp;
-
+typedef struct {
+    float x, y;
+    float vx, vy;
+    float w, h;
+    int hp, maxhp;
     int facing;
     int grounded;
-
     int attacking;
     float attackTime;
-
-    int magicCooldown;
-    float magicTimer;
-
     int invincible;
     float invincibleTimer;
+    int magicCooldown;
+    float magicTimer;
 } Player;
 
 typedef struct {
-    int x1;
-    int x2;
-    int row;
-} Platform;
-
-typedef struct {
-    float x;
-    float y;
-
+    float x, y;
     float vx;
-    float vy;
-
-    float life;
-    int active;
-} Magic;
-
-typedef struct {
-    float x;
-    float y;
-
-    float vx;
-
-    float w;
-    float h;
-
     int hp;
-    int maxhp;
-
-    int active;
-    int type;
-
+    int alive;
     int facing;
-
-    float attackTimer;
-    float hurtTimer;
-} Enemy;
+    float anim;
+    float attackCooldown;
+} Zombie;
 
 typedef struct {
-    float x;
-    float y;
-
-    float vx;
-    float vy;
-
-    float life;
+    float x, y;
+    float vx, vy;
     int active;
-} Particle;
+    float life;
+} MagicBolt;
 
-/* ---------------------------------------------------------
-   VARIAVEIS GLOBAIS
-   --------------------------------------------------------- */
+typedef struct {
+    float x, y;
+    float vx, vy;
+    int hp, maxhp;
+    int active;
+    int state;
+    int facing;
+    float timer;
+    float attackCooldown;
+    float anim;
+    int grounded;
+} FinalBoss;
+
+typedef struct {
+    float x, width;
+    int secret;
+} Room;
 
 static Player p;
-
-static Magic magic[MAX_MAGIC];
-static Enemy enemies[MAX_ENEMIES];
-static Particle particles[MAX_PARTICLES];
+static Zombie zombies[ZOMBIE_MAX];
+static MagicBolt bolts[4];
+static FinalBoss boss;
+static Room rooms[ROOM_COUNT];
 
 static float cameraX = 0.0f;
-
-static int gameRunning = 1;
-
-static int currentZone = 0;
-
-/* ---------------------------------------------------------
-   PLATAFORMAS
-   x1 e x2 sao colunas do mapa.
-   row define a altura: row * TILE.
-   --------------------------------------------------------- */
-
-static const Platform platforms[] = {
-
-    /* ZONA 1 - CAVERNA */
-
-    {  8,  14, 6 },
-    { 20,  26, 7 },
-    { 33,  40, 5 },
-    { 48,  55, 7 },
-    { 66,  74, 6 },
-    { 83,  90, 5 },
-
-    /* ZONA 2 - FLORESTA */
-
-    {106, 115, 6 },
-    {121, 130, 7 },
-    {137, 145, 5 },
-    {153, 162, 6 },
-    {171, 180, 5 },
-    {189, 198, 7 },
-    {207, 216, 6 },
-    {225, 234, 5 }
-};
-
-#define PLATFORM_COUNT \
-    ((int)(sizeof(platforms) / sizeof(platforms[0])))
+static float gameTime = 0.0f;
+static int gameOver = 0;
+static int victory = 0;
+static int bossStarted = 0;
+static int previousButtons = 0;
+static int attackFlash = 0;
 
 /* ---------------------------------------------------------
-   CORES
-   Formato GU: RGBA
+   DESENHO BASICO
    --------------------------------------------------------- */
 
-#define COLOR(r,g,b,a) \
-    ((unsigned int)(r) | \
-    ((unsigned int)(g) << 8) | \
-    ((unsigned int)(b) << 16) | \
-    ((unsigned int)(a) << 24))
+static void drawRect(float x, float y, float w, float h,
+                     unsigned int color)
+{
+    Vertex v[2];
 
-#define BLACK       COLOR(8, 8, 15, 255)
-#define WHITE       COLOR(255, 255, 255, 255)
-#define RED         COLOR(220, 45, 45, 255)
-#define DARK_RED    COLOR(100, 15, 20, 255)
-#define GREEN       COLOR(60, 220, 90, 255)
-#define BLUE        COLOR(65, 140, 255, 255)
-#define YELLOW      COLOR(255, 220, 70, 255)
-#define ORANGE      COLOR(255, 120, 30, 255)
-#define PURPLE      COLOR(180, 80, 255, 255)
-#define CYAN        COLOR(80, 240, 255, 255)
-#define GRAY        COLOR(95, 100, 115, 255)
-#define DARK_GRAY   COLOR(35, 40, 55, 255)
-#define BROWN       COLOR(95, 55, 35, 255)
-#define DARK_BROWN  COLOR(45, 28, 25, 255)
+    v[0].color = color;
+    v[0].x = x;
+    v[0].y = y;
+    v[0].z = 0.0f;
 
-/* ---------------------------------------------------------
-   DESENHO 2D
-   --------------------------------------------------------- */
+    v[1].color = color;
+    v[1].x = x + w;
+    v[1].y = y + h;
+    v[1].z = 0.0f;
 
-static void drawRect(
-    int x,
-    int y,
-    int w,
-    int h,
-    unsigned int color
-) {
-    struct RectVertex {
-        unsigned int color;
-        float x;
-        float y;
-        float z;
-    };
-
-    struct RectVertex vertices[2];
-
-    if (w <= 0 || h <= 0)
-        return;
-
-    vertices[0].color = color;
-    vertices[0].x = (float)x;
-    vertices[0].y = (float)y;
-    vertices[0].z = 0.0f;
-
-    vertices[1].color = color;
-    vertices[1].x = (float)(x + w);
-    vertices[1].y = (float)(y + h);
-    vertices[1].z = 0.0f;
-
-    sceGuDisable(GU_TEXTURE_2D);
-    sceGuColor(color);
-
-    sceGuDrawArray(
-        GU_SPRITES,
-        GU_COLOR_8888 |
-        GU_VERTEX_32BITF |
-        GU_TRANSFORM_2D,
-        2,
-        0,
-        vertices
-    );
+    sceGuDrawArray(GU_SPRITES,
+        GU_COLOR_8888 | GU_VERTEX_32BITF | GU_TRANSFORM_2D,
+        2, 0, v);
 }
 
-static void drawTriangle(
+static void drawLine(float x1, float y1, float x2, float y2,
+                     unsigned int color)
+{
+    Vertex v[2];
 
-    float x1,
-    float y1,
-    float x2,
-    float y2,
-    float x3,
-    float y3,
-    unsigned int color
-) {
-    struct Vertex {
-        unsigned int color;
-        float x, y, z;
-    };
+    v[0].color = color;
+    v[0].x = x1;
+    v[0].y = y1;
+    v[0].z = 0.0f;
 
-    struct Vertex vertices[3] = {
-        { color, x1, y1, 0 },
-        { color, x2, y2, 0 },
-        { color, x3, y3, 0 }
-    };
+    v[1].color = color;
+    v[1].x = x2;
+    v[1].y = y2;
+    v[1].z = 0.0f;
 
-    sceGuColor(color);
-
-    sceGuDisable(GU_TEXTURE_2D);
-
-    sceGuDrawArray(
-        GU_TRIANGLES,
-        GU_COLOR_8888 |
-        GU_VERTEX_32BITF |
-        GU_TRANSFORM_2D,
-        3,
-        0,
-        vertices
-    );
+    sceGuDrawArray(GU_LINES,
+        GU_COLOR_8888 | GU_VERTEX_32BITF | GU_TRANSFORM_2D,
+        2, 0, v);
 }
 
-static void drawCircle(
-    int cx,
-    int cy,
-    int radius,
-    unsigned int color
-) {
+static void drawCircle(float cx, float cy, float radius,
+                       unsigned int color)
+{
     int i;
+    const int segments = 16;
 
-    if (radius <= 0)
-        return;
+    for (i = 0; i < segments; i++) {
+        float a1 = (float)i * 6.2831853f / segments;
+        float a2 = (float)(i + 1) * 6.2831853f / segments;
 
-    for (i = 0; i < 12; i++) {
-        float a1 =
-            (float)i * 6.2831853f / 12.0f;
+        drawLine(cx + cosf(a1) * radius,
+                 cy + sinf(a1) * radius,
+                 cx + cosf(a2) * radius,
+                 cy + sinf(a2) * radius,
+                 color);
+    }
+}
 
-        float a2 =
-            (float)(i + 1) * 6.2831853f / 12.0f;
+static float clampf(float v, float min, float max)
+{
+    if (v < min) return min;
+    if (v > max) return max;
+    return v;
+}
 
-        drawTriangle(
-            (float)cx,
-            (float)cy,
-            cx + cosf(a1) * radius,
-            cy + sinf(a1) * radius,
-            cx + cosf(a2) * radius,
-            cy + sinf(a2) * radius,
-            color
-        );
+static int overlap(float ax, float ay, float aw, float ah,
+                   float bx, float by, float bw, float bh)
+{
+    return ax < bx + bw && ax + aw > bx &&
+           ay < by + bh && ay + ah > by;
+}
+
+/* ---------------------------------------------------------
+   PERSONAGEM ORGANICO
+   --------------------------------------------------------- */
+
+static void drawPlayer(void)
+{
+    float sx = p.x - cameraX;
+    float sy = p.y;
+    float dir = (float)p.facing;
+    float step = sinf(gameTime * 12.0f) * 3.0f;
+    unsigned int ink = p.invincible ? GOLD : WHITE;
+
+    if (p.invincible && ((int)(gameTime * 18.0f) % 2))
+        ink = RED;
+
+    /* Corpo */
+    drawLine(sx - 5, sy + 12, sx - 7, sy + 22, ink);
+    drawLine(sx - 7, sy + 22, sx - 4, sy + 31, ink);
+    drawLine(sx - 4, sy + 31, sx + 3, sy + 34, ink);
+    drawLine(sx + 3, sy + 34, sx + 7, sy + 26, ink);
+    drawLine(sx + 7, sy + 26, sx + 5, sy + 13, ink);
+
+    /* Cabeca */
+    drawCircle(sx, sy + 8, 7.0f, ink);
+    drawLine(sx - 5, sy + 4, sx, sy + 1, ink);
+    drawLine(sx, sy + 1, sx + 5, sy + 4, ink);
+
+    /* Olho */
+    drawLine(sx + dir * 2, sy + 7,
+             sx + dir * 5, sy + 7, RED);
+
+    /* Bracos */
+    if (p.attacking) {
+        drawLine(sx + dir * 2, sy + 15,
+                 sx + dir * 11, sy + 12, ink);
+        drawLine(sx + dir * 11, sy + 12,
+                 sx + dir * 19, sy + 12, WHITE);
+
+        drawLine(sx - dir * 3, sy + 15,
+                 sx - dir * 8, sy + 22, ink);
+    } else {
+        drawLine(sx - 4, sy + 15,
+                 sx - 10, sy + 20 + step, ink);
+        drawLine(sx + 4, sy + 15,
+                 sx + 10, sy + 20 - step, ink);
+    }
+
+    /* Pernas animadas */
+    if (p.grounded) {
+        drawLine(sx - 3, sy + 31,
+                 sx - 6 - step, sy + 38, ink);
+        drawLine(sx + 3, sy + 31,
+                 sx + 7 + step, sy + 38, ink);
+    } else {
+        drawLine(sx - 3, sy + 31, sx - 8, sy + 35, ink);
+        drawLine(sx + 3, sy + 31, sx + 8, sy + 35, ink);
+    }
+
+    /* Silhueta de energia da magia */
+    if (p.magicTimer > 0.0f) {
+        drawCircle(sx, sy + 18, 18.0f, PURPLE);
+        drawCircle(sx, sy + 18, 22.0f, PURPLE);
     }
 }
 
 /* ---------------------------------------------------------
-   TEXTO DEBUG
+   LABIRINTO
    --------------------------------------------------------- */
 
-static void drawDebugText(void) {
-    /* A interface visual principal e desenhada em C.
-       O pspDebugScreen fica disponivel para diagnostico. */
+static void initCave(void)
+{
+    int i;
+
+    for (i = 0; i < ROOM_COUNT; i++) {
+        rooms[i].x = 120.0f + i * 420.0f;
+        rooms[i].width = 260.0f + (float)((i * 37) % 100);
+        rooms[i].secret = (i % 3 == 1);
+    }
+}
+
+static int caveFloorAt(float x)
+{
+    int i;
+
+    /* A maior parte do mapa possui piso continuo. */
+    for (i = 0; i < ROOM_COUNT; i++) {
+        if (x >= rooms[i].x &&
+            x <= rooms[i].x + rooms[i].width)
+            return 1;
+    }
+
+    return 1;
+}
+
+static void drawCaveScene(void)
+{
+    int i;
+    float sx;
+
+    /* Fundo */
+    drawRect(0, 0, SCREEN_W, SCREEN_H, DARK);
+
+    /* Camadas distantes da caverna */
+    for (i = 0; i < 9; i++) {
+        sx = (float)(i * 110) - fmodf(cameraX * 0.18f, 110.0f);
+        drawLine(sx, 0, sx + 55, 55, GRAY);
+        drawLine(sx + 55, 55, sx + 90, 20, GRAY);
+    }
+
+    /* Teto irregular */
+    for (i = 0; i < 15; i++) {
+        float x = (float)(i * 45) -
+                  fmodf(cameraX * 0.35f, 45.0f);
+        float tip = 22.0f + (float)((i * 29) % 48);
+
+        drawLine(x, 0, x + 20, tip, GRAY);
+        drawLine(x + 20, tip, x + 35, 0, GRAY);
+    }
+
+    /* Plataformas e paredes de salas */
+    for (i = 0; i < ROOM_COUNT; i++) {
+        float rx = rooms[i].x - cameraX;
+        float rw = rooms[i].width;
+
+        if (rx > SCREEN_W || rx + rw < 0)
+            continue;
+
+        drawRect(rx, FLOOR_Y, rw, SCREEN_H - FLOOR_Y,
+                 COLOR(43, 44, 54, 255));
+        drawLine(rx, FLOOR_Y, rx + rw, FLOOR_Y, GRAY);
+
+        /* Pedras na parede */
+        drawLine(rx + 20, FLOOR_Y - 2,
+                 rx + 45, FLOOR_Y - 15, GRAY);
+        drawLine(rx + 45, FLOOR_Y - 15,
+                 rx + 66, FLOOR_Y - 2, GRAY);
+
+        /* Entrada de sala secreta */
+        if (rooms[i].secret) {
+            drawLine(rx + rw * 0.5f, FLOOR_Y - 4,
+                     rx + rw * 0.5f, FLOOR_Y - 42, PURPLE);
+            drawLine(rx + rw * 0.5f - 10, FLOOR_Y - 42,
+                     rx + rw * 0.5f + 10, FLOOR_Y - 42,
+                     PURPLE);
+        }
+
+        /* Cristais decorativos */
+        drawLine(rx + rw * 0.25f, FLOOR_Y - 2,
+                 rx + rw * 0.25f + 6, FLOOR_Y - 20, PURPLE);
+        drawLine(rx + rw * 0.25f + 6, FLOOR_Y - 20,
+                 rx + rw * 0.25f + 12, FLOOR_Y - 2, PURPLE);
+    }
+
+    /* Chao principal */
+    drawRect(0, FLOOR_Y, SCREEN_W,
+             SCREEN_H - FLOOR_Y, COLOR(36, 37, 47, 255));
+    drawLine(0, FLOOR_Y, SCREEN_W, FLOOR_Y, WHITE);
 }
 
 /* ---------------------------------------------------------
-   PLATAFORMAS E COLISAO
+   ZUMBIS
    --------------------------------------------------------- */
 
-static float platformTop(int row) {
-    return (float)(row * TILE);
-}
-
-static int overlaps(
-    float ax,
-    float aw,
-    float bx,
-    float bw
-) {
-    return ax < bx + bw &&
-           ax + aw > bx;
-}
-
-static int platformOverlaps(
-    float x,
-    float w,
-    int index
-) {
-    float left =
-        (float)(platforms[index].x1 * TILE);
-
-    float right =
-        (float)((platforms[index].x2 + 1) * TILE);
-
-    return overlaps(
-        x,
-        w,
-        left,
-        right - left
-    );
-}
-
-static int isPlatformAt(
-    float x,
-    float y,
-    float w
-) {
+static void initZombies(void)
+{
     int i;
 
-    if (y >= FLOOR_Y - 0.5f)
-        return 1;
+    memset(zombies, 0, sizeof(zombies));
 
-    for (i = 0; i < PLATFORM_COUNT; i++) {
-        float top = platformTop(platforms[i].row);
+    for (i = 0; i < ZOMBIE_MAX; i++) {
+        zombies[i].x = 360.0f + i * 420.0f;
+        zombies[i].y = FLOOR_Y - 32.0f;
+        zombies[i].hp = 3;
+        zombies[i].alive = 1;
+        zombies[i].facing = -1;
+        zombies[i].anim = (float)i;
+    }
+}
 
-        if (fabsf(y - top) < 1.0f &&
-            platformOverlaps(x, w, i)) {
-            return 1;
+static void updateZombies(float dt)
+{
+    int i;
+
+    for (i = 0; i < ZOMBIE_MAX; i++) {
+        Zombie *z = &zombies[i];
+        float dx;
+
+        if (!z->alive)
+            continue;
+
+        dx = p.x - z->x;
+        z->anim += dt * 8.0f;
+
+        if (fabsf(dx) < 300.0f) {
+            z->facing = dx >= 0 ? 1 : -1;
+
+            if (fabsf(dx) > 28.0f)
+                z->x += z->facing * 48.0f * dt;
+        }
+
+        z->x = clampf(z->x, 0.0f, WORLD_W - 24.0f);
+
+        if (z->attackCooldown > 0.0f)
+            z->attackCooldown -= dt;
+
+        if (overlap(p.x, p.y, p.w, p.h,
+                    z->x, z->y, 22.0f, 32.0f) &&
+            z->attackCooldown <= 0.0f &&
+            p.invincibleTimer <= 0.0f) {
+            p.hp -= 1;
+            p.invincibleTimer = 0.8f;
+            z->attackCooldown = 1.0f;
         }
     }
-
-    return 0;
 }
 
-/* ---------------------------------------------------------
-   INICIALIZACAO DO JOGADOR
-   --------------------------------------------------------- */
+static void drawZombie(Zombie *z)
+{
+    float sx = z->x - cameraX;
+    float sy = z->y;
+    float walk = sinf(z->anim) * 3.0f;
 
-static void initPlayer(void) {
-    memset(&p, 0, sizeof(Player));
+    if (!z->alive || sx < -40 || sx > SCREEN_W + 40)
+        return;
 
-    p.x = 100.0f;
-    p.y = (float)FLOOR_Y;
+    /* Corpo irregular */
+    drawLine(sx - 7, sy + 5, sx - 8, sy + 19, GREEN);
+    drawLine(sx - 8, sy + 19, sx - 4, sy + 27, GREEN);
+    drawLine(sx - 4, sy + 27, sx + 6, sy + 27, GREEN);
+    drawLine(sx + 6, sy + 27, sx + 8, sy + 9, GREEN);
 
-    p.w = 20.0f;
-    p.h = 40.0f;
+    drawCircle(sx, sy + 3, 8.0f, GREEN);
+    drawLine(sx - 5, sy + 1, sx - 2, sy + 1, RED);
+    drawLine(sx + 2, sy + 1, sx + 5, sy + 1, RED);
 
-    p.hp = 100;
-    p.maxhp = 100;
+    drawLine(sx - 5, sy + 11,
+             sx - 13, sy + 17 + walk, GREEN);
+    drawLine(sx + 5, sy + 11,
+             sx + 13, sy + 17 - walk, GREEN);
 
-    p.facing = 1;
-    p.grounded = 1;
+    drawLine(sx - 3, sy + 27,
+             sx - 6 - walk, sy + 32, GREEN);
+    drawLine(sx + 3, sy + 27,
+             sx + 6 + walk, sy + 32, GREEN);
 
-    p.magicCooldown = 0;
+    drawRect(sx - 10, sy - 10, 20, 2, BLACK);
+    drawRect(sx - 10, sy - 10,
+             20.0f * z->hp / 3.0f, 2, RED);
 }
 
-/* ---------------------------------------------------------
-   INICIALIZACAO DOS INIMIGOS
-   --------------------------------------------------------- */
-
-static void createEnemy(
-    int index,
-    float x,
-    int type
-) {
-    Enemy *e = &enemies[index];
-
-    memset(e, 0, sizeof(Enemy));
-
-    e->x = x;
-    e->y = (float)FLOOR_Y;
-
-    e->type = type;
-    e->active = 1;
-
-    e->facing = -1;
-
-    if (type == 1) {
-        /* Golem */
-        e->w = 42;
-        e->h = 54;
-
-        e->hp = 300;
-        e->maxhp = 300;
-    } else {
-        /* Zumbi */
-        e->w = 22;
-        e->h = 36;
-
-        e->hp = 45;
-        e->maxhp = 45;
-    }
-}
-
-static void initEnemies(void) {
+static void drawZombies(void)
+{
     int i;
 
-    memset(enemies, 0, sizeof(enemies));
-
-    createEnemy(0, 650, 0);
-    createEnemy(1, 1450, 1);
-    createEnemy(2, 1900, 0);
-    createEnemy(3, 2200, 0);
-
-    createEnemy(4, 2800, 0);
-    createEnemy(5, 3550, 1);
-    createEnemy(6, 4050, 0);
-    createEnemy(7, 4650, 0);
-    createEnemy(8, 5200, 0);
-    createEnemy(9, 5550, 0);
-
-    for (i = 0; i < MAX_ENEMIES; i++) {
-        enemies[i].attackTimer = 0.0f;
-        enemies[i].hurtTimer = 0.0f;
-    }
+    for (i = 0; i < ZOMBIE_MAX; i++)
+        drawZombie(&zombies[i]);
 }
 
 /* ---------------------------------------------------------
    MAGIA
    --------------------------------------------------------- */
 
-static void castMagic(void) {
+static void castMagic(void)
+{
     int i;
 
-    if (p.magicTimer > 0.0f)
+    if (p.magicCooldown > 0)
         return;
 
-    for (i = 0; i < MAX_MAGIC; i++) {
-        if (!magic[i].active) {
-            magic[i].x =
-                p.x + (p.facing > 0 ? 18.0f : -12.0f);
-
-            magic[i].y = p.y - 24.0f;
-
-            magic[i].vx =
-                (float)p.facing * 280.0f;
-
-            magic[i].vy = -15.0f;
-
-            magic[i].life = 1.8f;
-            magic[i].active = 1;
-
-            p.magicTimer = 0.35f;
-
-            break;
-        }
-    }
-}
-
-static void updateMagic(float dt) {
-    int i, j;
-
-    for (i = 0; i < MAX_MAGIC; i++) {
-        Magic *m = &magic[i];
-
-        if (!m->active)
-            continue;
-
-        m->x += m->vx * dt;
-        m->y += m->vy * dt;
-
-        m->life -= dt;
-
-        if (m->life <= 0.0f ||
-            m->x < 0 ||
-            m->x > WORLD_W) {
-            m->active = 0;
-            continue;
-        }
-
-        for (j = 0; j < MAX_ENEMIES; j++) {
-            Enemy *e = &enemies[j];
-
-            if (!e->active)
-                continue;
-
-            if (fabsf(m->x - e->x) < e->w * 0.5f + 8 &&
-                fabsf(m->y - (e->y - e->h * 0.5f))
-                    < e->h * 0.5f + 8) {
-
-                e->hp -= 35;
-                e->hurtTimer = 0.15f;
-
-                m->active = 0;
-
-                if (e->hp <= 0) {
-                    e->active = 0;
-                }
-
-                break;
-            }
-        }
-    }
-}
-
-static void drawMagic(void) {
-    int i;
-
-    for (i = 0; i < MAX_MAGIC; i++) {
-        Magic *m = &magic[i];
-
-        if (!m->active)
-            continue;
-
-        int sx = (int)(m->x - cameraX);
-        int sy = (int)m->y;
-
-        drawCircle(sx, sy, 9, PURPLE);
-        drawCircle(sx, sy, 5, CYAN);
-
-        drawTriangle(
-            sx - 13, sy,
-            sx - 4, sy - 5,
-            sx - 4, sy + 5,
-            WHITE
-        );
-    }
-}
-
-/* ---------------------------------------------------------
-   PARTICULAS
-   --------------------------------------------------------- */
-
-static void spawnParticles(
-    float x,
-    float y,
-    unsigned int color
-) {
-    int i;
-
-    for (i = 0; i < MAX_PARTICLES; i++) {
-        if (!particles[i].active) {
-            particles[i].x = x;
-            particles[i].y = y;
-
-            particles[i].vx =
-                (float)((rand() % 180) - 90);
-
-            particles[i].vy =
-                (float)(-40 - rand() % 140);
-
-            particles[i].life =
-                0.25f + (float)(rand() % 50) / 100.0f;
-
-            particles[i].active = 1;
-
-            (void)color;
+    for (i = 0; i < 4; i++) {
+        if (!bolts[i].active) {
+            bolts[i].active = 1;
+            bolts[i].x = p.x + p.facing * 16.0f;
+            bolts[i].y = p.y + 17.0f;
+            bolts[i].vx = p.facing * 280.0f;
+            bolts[i].vy = 0.0f;
+            bolts[i].life = 1.5f;
+            p.magicCooldown = 1;
+            p.magicTimer = 0.25f;
             return;
         }
     }
 }
 
-static void updateParticles(float dt) {
-    int i;
+static void updateMagic(float dt)
+{
+    int i, j;
 
-    for (i = 0; i < MAX_PARTICLES; i++) {
-        Particle *a = &particles[i];
+    for (i = 0; i < 4; i++) {
+        MagicBolt *b = &bolts[i];
 
-        if (!a->active)
+        if (!b->active)
             continue;
 
-        a->x += a->vx * dt;
-        a->y += a->vy * dt;
+        b->x += b->vx * dt;
+        b->y += b->vy * dt;
+        b->life -= dt;
 
-        a->vy += 200.0f * dt;
-
-        a->life -= dt;
-
-        if (a->life <= 0.0f)
-            a->active = 0;
-    }
-}
-
-static void drawParticles(void) {
-    int i;
-
-    for (i = 0; i < MAX_PARTICLES; i++) {
-        Particle *a = &particles[i];
-
-        if (!a->active)
+        if (b->life <= 0.0f ||
+            b->x < 0.0f || b->x > WORLD_W) {
+            b->active = 0;
             continue;
-
-        drawRect(
-            (int)(a->x - cameraX),
-            (int)a->y,
-            3,
-            3,
-            ORANGE
-        );
-    }
-}
-
-/* ---------------------------------------------------------
-   ATAQUE DE ESPADA
-   O dano e aplicado uma vez no inicio do golpe.
-   --------------------------------------------------------- */
-
-static void swordAttack(void) {
-    int i;
-
-    if (p.attacking)
-        return;
-
-    p.attacking = 1;
-    p.attackTime = 0.28f;
-
-    for (i = 0; i < MAX_ENEMIES; i++) {
-        Enemy *e = &enemies[i];
-
-        float dx;
-        float dy;
-
-        if (!e->active)
-            continue;
-
-        dx = e->x - p.x;
-        dy = (e->y - e->h * 0.5f) -
-             (p.y - p.h * 0.5f);
-
-        if (p.facing > 0 &&
-            dx > 0 &&
-            dx < 64 &&
-            fabsf(dy) < 43) {
-
-            e->hp -= 25;
-            e->hurtTimer = 0.18f;
-
-            spawnParticles(
-                e->x,
-                e->y - e->h * 0.5f,
-                YELLOW
-            );
         }
 
-        if (p.facing < 0 &&
-            dx < 0 &&
-            dx > -64 &&
-            fabsf(dy) < 43) {
+        for (j = 0; j < ZOMBIE_MAX; j++) {
+            Zombie *z = &zombies[j];
 
-            e->hp -= 25;
-            e->hurtTimer = 0.18f;
+            if (z->alive &&
+                overlap(b->x - 5, b->y - 5, 10, 10,
+                        z->x - 10, z->y, 22, 32)) {
+                z->hp -= 2;
+                b->active = 0;
 
-            spawnParticles(
-                e->x,
-                e->y - e->h * 0.5f,
-                YELLOW
-            );
+                if (z->hp <= 0)
+                    z->alive = 0;
+
+                break;
+            }
         }
 
-        if (e->hp <= 0)
-            e->active = 0;
-    }
-}
+        if (b->active && bossStarted && boss.active &&
+            overlap(b->x - 5, b->y - 5, 10, 10,
+                    boss.x - 24, boss.y - 65, 48, 65)) {
+            boss.hp -= 20;
+            b->active = 0;
 
-/* ---------------------------------------------------------
-   JOGADOR
-   p.y representa a posicao dos pes.
-   --------------------------------------------------------- */
-
-static void updatePlayer(
-    float dt,
-    SceCtrlData *pad,
-    SceCtrlData *oldPad
-) {
-    float previousY;
-    float nextY;
-
-    int left =
-        (pad->Buttons & PSP_CTRL_LEFT) != 0;
-
-    int right =
-        (pad->Buttons & PSP_CTRL_RIGHT) != 0;
-
-    int jumpPressed =
-        (pad->Buttons & PSP_CTRL_CROSS) &&
-        !(oldPad->Buttons & PSP_CTRL_CROSS);
-
-    int swordPressed =
-        (pad->Buttons & PSP_CTRL_SQUARE) &&
-        !(oldPad->Buttons & PSP_CTRL_SQUARE);
-
-    int magicPressed =
-        (pad->Buttons & PSP_CTRL_TRIANGLE) &&
-        !(oldPad->Buttons & PSP_CTRL_TRIANGLE);
-
-    if (left) {
-        p.vx = -PLAYER_SPEED;
-        p.facing = -1;
-    } else if (right) {
-        p.vx = PLAYER_SPEED;
-        p.facing = 1;
-    } else {
-        p.vx = 0.0f;
-    }
-
-    p.x += p.vx * dt;
-
-    if (p.x < 0)
-        p.x = 0;
-
-    if (p.x > WORLD_W - p.w)
-        p.x = WORLD_W - p.w;
-
-    if (jumpPressed && p.grounded) {
-        p.vy = -JUMP_POWER;
-        p.grounded = 0;
-    }
-
-    previousY = p.y;
-
-    p.vy += GRAVITY * dt;
-    nextY = p.y + p.vy * dt;
-
-    p.grounded = 0;
-
-    /*
-     * Colisao com o chao.
-     */
-
-    if (p.vy >= 0 &&
-        previousY <= FLOOR_Y &&
-        nextY >= FLOOR_Y) {
-
-        nextY = FLOOR_Y;
-        p.vy = 0;
-        p.grounded = 1;
-    }
-
-    /*
-     * Colisao com plataformas.
-     * So aterrissa ao cair de cima.
-     */
-
-    if (p.vy >= 0) {
-        int i;
-
-        for (i = 0; i < PLATFORM_COUNT; i++) {
-            float top =
-                platformTop(platforms[i].row);
-
-            if (previousY <= top &&
-                nextY >= top &&
-                platformOverlaps(
-                    p.x,
-                    p.w,
-                    i
-                )) {
-
-                if (top < nextY ||
-                    fabsf(top - nextY) < 1.0f) {
-
-                    nextY = top;
-                    p.vy = 0;
-                    p.grounded = 1;
-                }
+            if (boss.hp <= 0) {
+                boss.hp = 0;
+                boss.active = 0;
+                victory = 1;
             }
         }
     }
+}
 
-    p.y = nextY;
+static void drawMagic(void)
+{
+    int i;
 
-    if (p.y > FLOOR_Y) {
-        p.y = FLOOR_Y;
-        p.vy = 0;
-        p.grounded = 1;
-    }
-
-    if (swordPressed)
-        swordAttack();
-
-    if (magicPressed)
-        castMagic();
-
-    if (p.attacking) {
-        p.attackTime -= dt;
-
-        if (p.attackTime <= 0.0f) {
-            p.attackTime = 0.0f;
-            p.attacking = 0;
+    for (i = 0; i < 4; i++) {
+        if (bolts[i].active) {
+            float sx = bolts[i].x - cameraX;
+            drawCircle(sx, bolts[i].y, 7.0f, PURPLE);
+            drawLine(sx - 10, bolts[i].y,
+                     sx + 10, bolts[i].y, WHITE);
         }
     }
+}
+
+/* ---------------------------------------------------------
+   BOSS FINAL
+   --------------------------------------------------------- */
+
+#define BOSS_IDLE 0
+#define BOSS_CHASE 1
+#define BOSS_DASH 2
+#define BOSS_JUMP 3
+
+static void initBoss(void)
+{
+    memset(&boss, 0, sizeof(boss));
+
+    boss.x = 4700.0f;
+    boss.y = FLOOR_Y - 65.0f;
+    boss.hp = 500;
+    boss.maxhp = 500;
+    boss.active = 1;
+    boss.state = BOSS_IDLE;
+    boss.facing = -1;
+    boss.grounded = 1;
+    boss.attackCooldown = 1.5f;
+}
+
+static void updateBoss(float dt)
+{
+    float dx;
+
+    if (!boss.active || !bossStarted)
+        return;
+
+    dx = p.x - boss.x;
+    boss.anim += dt * 5.0f;
+    boss.timer += dt;
+
+    if (boss.attackCooldown > 0.0f)
+        boss.attackCooldown -= dt;
+
+    boss.facing = dx >= 0 ? 1 : -1;
+
+    if (boss.state == BOSS_IDLE) {
+        if (fabsf(dx) < 520.0f)
+            boss.state = BOSS_CHASE;
+    }
+    else if (boss.state == BOSS_CHASE) {
+        if (fabsf(dx) > 80.0f)
+            boss.x += boss.facing * 65.0f * dt;
+
+        if (boss.attackCooldown <= 0.0f) {
+            boss.state = BOSS_DASH;
+            boss.timer = 0.0f;
+            boss.attackCooldown = 2.0f;
+        }
+    }
+    else if (boss.state == BOSS_DASH) {
+        boss.x += boss.facing * 230.0f * dt;
+
+        if (boss.timer > 0.55f) {
+            boss.state = BOSS_CHASE;
+            boss.timer = 0.0f;
+        }
+    }
+
+    /* Gravidade e pulo do boss */
+    if (!boss.grounded) {
+        boss.vy += GRAVITY * dt;
+        boss.y += boss.vy * dt;
+
+        if (boss.y >= FLOOR_Y - 65.0f) {
+            boss.y = FLOOR_Y - 65.0f;
+            boss.vy = 0.0f;
+            boss.grounded = 1;
+        }
+    }
+
+    boss.x = clampf(boss.x, 4300.0f, 5100.0f);
+
+    /* Contato do boss causa dano */
+    if (overlap(p.x, p.y, p.w, p.h,
+                boss.x - 22, boss.y - 60, 44, 60) &&
+        p.invincibleTimer <= 0.0f) {
+        p.hp -= 2;
+        p.invincibleTimer = 1.0f;
+    }
+}
+
+static void damageBoss(int damage)
+{
+    if (!boss.active)
+        return;
+
+    boss.hp -= damage;
+
+    if (boss.hp <= 0) {
+        boss.hp = 0;
+        boss.active = 0;
+        victory = 1;
+    }
+}
+
+static void drawBoss(void)
+{
+    float sx, sy, walk;
+
+    if (!boss.active)
+        return;
+
+    sx = boss.x - cameraX;
+    sy = boss.y;
+    walk = sinf(boss.anim) * 5.0f;
+
+    if (sx < -80 || sx > SCREEN_W + 80)
+        return;
+
+    /* Silhueta grande, desenhada com linhas */
+    drawLine(sx - 22, sy + 8, sx - 26, sy + 36, RED);
+    drawLine(sx - 26, sy + 36, sx - 18, sy + 55, RED);
+    drawLine(sx - 18, sy + 55, sx + 18, sy + 55, RED);
+    drawLine(sx + 18, sy + 55, sx + 26, sy + 36, RED);
+    drawLine(sx + 26, sy + 36, sx + 22, sy + 8, RED);
+
+    drawCircle(sx, sy + 2, 18.0f, RED);
+
+    /* Chifres */
+    drawLine(sx - 12, sy - 8, sx - 25, sy - 24, RED);
+    drawLine(sx - 25, sy - 24, sx - 20, sy - 7, RED);
+    drawLine(sx + 12, sy - 8, sx + 25, sy - 24, RED);
+    drawLine(sx + 25, sy - 24, sx + 20, sy - 7, RED);
+
+    /* Olhos */
+    drawLine(sx - 10, sy, sx - 3, sy, GOLD);
+    drawLine(sx + 3, sy, sx + 10, sy, GOLD);
+
+    /* Bracos */
+    drawLine(sx - 18, sy + 15,
+             sx - 38, sy + 30 + walk, RED);
+    drawLine(sx - 38, sy + 30 + walk,
+             sx - 42, sy + 42 + walk, RED);
+
+    drawLine(sx + 18, sy + 15,
+             sx + 38, sy + 30 - walk, RED);
+    drawLine(sx + 38, sy + 30 - walk,
+             sx + 42, sy + 42 - walk, RED);
+
+    /* Pernas */
+    drawLine(sx - 12, sy + 53,
+             sx - 17 - walk, sy + 65, RED);
+    drawLine(sx + 12, sy + 53,
+             sx + 17 + walk, sy + 65, RED);
+
+    /* Barra de vida */
+    drawRect(100, 18, 280, 10, BLACK);
+    drawRect(100, 18,
+             280.0f * boss.hp / boss.maxhp,
+             10, RED);
+    drawRect(100, 18, 280, 1, WHITE);
+}
+
+/* ---------------------------------------------------------
+   JOGADOR, ATAQUE E COLISOES
+   --------------------------------------------------------- */
+
+static void initPlayer(void)
+{
+    memset(&p, 0, sizeof(p));
+
+    p.x = 60.0f;
+    p.y = FLOOR_Y - PLAYER_H;
+    p.w = PLAYER_W;
+    p.h = PLAYER_H;
+    p.hp = 10;
+    p.maxhp = 10;
+    p.facing = 1;
+    p.grounded = 1;
+}
+
+static void playerAttack(void)
+{
+    int i;
+    float ax;
+
+    p.attacking = 1;
+    p.attackTime = 0.18f;
+    attackFlash = 1;
+
+    ax = p.x + (p.facing > 0 ? p.w : -28.0f);
+
+    for (i = 0; i < ZOMBIE_MAX; i++) {
+        Zombie *z = &zombies[i];
+
+        if (z->alive &&
+            overlap(ax, p.y + 5, 28, 28,
+                    z->x - 10, z->y, 22, 32)) {
+            z->hp -= 1;
+
+            if (z->hp <= 0)
+                z->alive = 0;
+        }
+    }
+
+    if (bossStarted && boss.active &&
+        overlap(ax, p.y + 5, 28, 28,
+                boss.x - 24, boss.y - 60, 48, 60)) {
+        damageBoss(15);
+    }
+}
+
+static void updatePlayer(float dt, unsigned int buttons)
+{
+    float oldY = p.y;
+
+    p.vx = 0.0f;
+
+    if (buttons & PSP_CTRL_LEFT) {
+        p.vx = -MOVE_SPEED;
+        p.facing = -1;
+    }
+
+    if (buttons & PSP_CTRL_RIGHT) {
+        p.vx = MOVE_SPEED;
+        p.facing = 1;
+    }
+
+    p.x += p.vx * dt;
+    p.x = clampf(p.x, 0.0f, WORLD_W - p.w);
+
+    if ((buttons & PSP_CTRL_CROSS) && p.grounded) {
+        p.vy = JUMP_SPEED;
+        p.grounded = 0;
+    }
+
+    p.vy += GRAVITY * dt;
+    p.y += p.vy * dt;
+
+    if (p.y + p.h >= FLOOR_Y && caveFloorAt(p.x)) {
+        p.y = FLOOR_Y - p.h;
+        p.vy = 0.0f;
+        p.grounded = 1;
+    } else {
+        p.grounded = 0;
+    }
+
+    /* Evita ficar preso acima do limite superior. */
+    if (p.y < 0.0f) {
+        p.y = 0.0f;
+        p.vy = 0.0f;
+    }
+
+    (void)oldY;
+
+    if (p.attackTime > 0.0f) {
+        p.attackTime -= dt;
+
+        if (p.attackTime <= 0.0f)
+            p.attacking = 0;
+    }
+
+    if (p.invincibleTimer > 0.0f)
+        p.invincibleTimer -= dt;
+
+    p.invincible = p.invincibleTimer > 0.0f;
+
+    if (p.magicCooldown > 0)
+        p.magicCooldown = 0;
 
     if (p.magicTimer > 0.0f)
         p.magicTimer -= dt;
 
-    if (p.invincibleTimer > 0.0f)
-        p.invincibleTimer -= dt;
-    else
-        p.invincible = 0;
-}
-
-/* ---------------------------------------------------------
-   INIMIGOS
-   --------------------------------------------------------- */
-
-static void updateEnemies(float dt) {
-    int i;
-
-    for (i = 0; i < MAX_ENEMIES; i++) {
-        Enemy *e = &enemies[i];
-
-        if (!e->active)
-            continue;
-
-        if (e->hurtTimer > 0.0f)
-            e->hurtTimer -= dt;
-
-        if (e->attackTimer > 0.0f)
-            e->attackTimer -= dt;
-
-        float dx = p.x - e->x;
-
-        if (fabsf(dx) < 240.0f) {
-            e->facing = dx >= 0 ? 1 : -1;
-
-            if (fabsf(dx) > 38.0f) {
-                float speed =
-                    e->type == 1 ? 38.0f : 55.0f;
-
-                e->x +=
-                    (dx > 0 ? speed : -speed) * dt;
-            } else if (e->attackTimer <= 0.0f) {
-                if (p.invincibleTimer <= 0.0f) {
-                    p.hp -=
-                        e->type == 1 ? 15 : 7;
-
-                    if (p.hp < 0)
-                        p.hp = 0;
-
-                    p.invincible = 1;
-                    p.invincibleTimer = 0.7f;
-                }
-
-                e->attackTimer = 1.0f;
-            }
-        }
-
-        if (e->x < 0)
-            e->x = 0;
-
-        if (e->x > WORLD_W - e->w)
-            e->x = WORLD_W - e->w;
-    }
-}
-
-/* ---------------------------------------------------------
-   CAMERA
-   --------------------------------------------------------- */
-
-static void updateCamera(void) {
-    cameraX = p.x - SW * 0.5f;
-
-    if (cameraX < 0)
-        cameraX = 0;
-
-    if (cameraX > WORLD_W - SW)
-        cameraX = WORLD_W - SW;
-
-    if (p.x < ZONE_SPLIT * TILE)
-        currentZone = 0;
-    else
-        currentZone = 1;
-}
-
-/* ---------------------------------------------------------
-   CENARIO
-   --------------------------------------------------------- */
-
-static void drawBackground(void) {
-    int x;
-
-    if (currentZone == 0) {
-        /* Caverna */
-
-        drawRect(0, 0, SW, SH,
-                 COLOR(12, 12, 32, 255));
-
-        /* Formacoes rochosas */
-
-        for (x = 0; x < SW; x += 80) {
-            drawTriangle(
-                x, 0,
-                x + 40, 48,
-                x + 80, 0,
-                COLOR(28, 30, 55, 255)
-            );
-
-            drawTriangle(
-                x + 10, SH,
-                x + 40, 218,
-                x + 70, SH,
-                COLOR(22, 24, 43, 255)
-            );
-        }
-
-        /* Cristais */
-
-        drawTriangle(
-            70, 120,
-            80, 95,
-            90, 120,
-            PURPLE
-        );
-
-        drawTriangle(
-            340, 145,
-            350, 115,
-            360, 145,
-            CYAN
-        );
-    } else {
-        /* Floresta */
-
-        drawRect(0, 0, SW, SH,
-                 COLOR(10, 38, 35, 255));
-
-        /* Lua / luz */
-
-        drawCircle(380, 48, 24,
-                   COLOR(90, 140, 130, 255));
-
-        drawCircle(388, 43, 20,
-                   COLOR(10, 38, 35, 255));
-
-        /* Silhuetas de arvores */
-
-        for (x = 0; x < SW; x += 95) {
-            drawTriangle(
-                x + 5, 190,
-                x + 42, 48,
-                x + 78, 190,
-                COLOR(12, 65, 45, 255)
-            );
-
-            drawRect(
-                x + 34,
-                160,
-                15,
-                60,
-                COLOR(48, 35, 28, 255)
-            );
-        }
-    }
-}
-
-static void drawPlatforms(void) {
-    int i;
-
-    /* Chao principal */
-
-    drawRect(
-        0,
-        FLOOR_Y,
-        SW,
-        SH - FLOOR_Y,
-        DARK_BROWN
-    );
-
-    drawRect(
-        0,
-        FLOOR_Y,
-        SW,
-        5,
-        COLOR(100, 85, 65, 255)
-    );
-
-    for (i = 0; i < PLATFORM_COUNT; i++) {
-        float wx1 =
-            (float)(platforms[i].x1 * TILE);
-
-        float wx2 =
-            (float)((platforms[i].x2 + 1) * TILE);
-
-        float sy =
-            platformTop(platforms[i].row);
-
-        int sx = (int)(wx1 - cameraX);
-        int ex = (int)(wx2 - cameraX);
-
-        int width = ex - sx;
-
-        if (ex < 0 || sx > SW)
-            continue;
-
-        if (currentZone == 0) {
-            drawRect(
-                sx,
-                (int)sy,
-                width,
-                12,
-                COLOR(60, 60, 82, 255)
-            );
-
-            drawRect(
-                sx,
-                (int)sy,
-                width,
-                4,
-                COLOR(115, 120, 155, 255)
-            );
-        } else {
-            drawRect(
-                sx,
-                (int)sy,
-                width,
-                12,
-                COLOR(60, 90, 52, 255)
-            );
-
-            drawRect(
-                sx,
-                (int)sy,
-                width,
-                4,
-                COLOR(100, 170, 75, 255)
-            );
-        }
-
-        /* Detalhes da plataforma */
-
-        drawRect(
-            sx + 5,
-            (int)sy + 7,
-            6,
-            2,
-            DARK_GRAY
-        );
-
-        drawRect(
-            sx + width / 2,
-            (int)sy + 8,
-            8,
-            2,
-            DARK_GRAY
-        );
-    }
-}
-
-/* ---------------------------------------------------------
-   JOGADOR VISUAL
-   --------------------------------------------------------- */
-
-static void drawPlayer(void) {
-    int sx = (int)(p.x - cameraX);
-    int sy = (int)p.y;
-
-    int bodyColor =
-        (p.invincible &&
-         ((int)(p.invincibleTimer * 20) % 2))
-        ? WHITE
-        : COLOR(25, 25, 38, 255);
-
-    /*
-     * Capa.
-     */
-
-    drawTriangle(
-        sx - 5,
-        sy - 34,
-        sx + 5,
-        sy - 35,
-        sx - 10,
-        sy - 8,
-        COLOR(130, 20, 35, 255)
-    );
-
-    /*
-     * Pernas.
-     */
-
-    drawRect(
-        sx - 7,
-        sy - 13,
-        6,
-        13,
-        DARK_GRAY
-    );
-
-    drawRect(
-        sx + 2,
-        sy - 13,
-        6,
-        13,
-        DARK_GRAY
-    );
-
-    /*
-     * Botas.
-     */
-
-    drawRect(
-        sx - 9,
-        sy - 3,
-        9,
-        4,
-        BLACK
-    );
-
-    drawRect(
-        sx + 1,
-        sy - 3,
-        9,
-        4,
-        BLACK
-    );
-
-    /*
-     * Corpo.
-     */
-
-    drawRect(
-        sx - 9,
-        sy - 33,
-        18,
-        21,
-        bodyColor
-    );
-
-    drawRect(
-        sx - 8,
-        sy - 31,
-        16,
-        3,
-        COLOR(130, 25, 40, 255)
-    );
-
-    /*
-     * Cabeca.
-     */
-
-    drawRect(
-        sx - 7,
-        sy - 45,
-        14,
-        13,
-        COLOR(220, 180, 145, 255)
-    );
-
-    /*
-     * Cabelo.
-     */
-
-    drawRect(
-        sx - 8,
-        sy - 46,
-        16,
-        5,
-        BLACK
-    );
-
-    drawTriangle(
-        sx - 7,
-        sy - 42,
-        sx - 2,
-        sy - 48,
-        sx + 1,
-        sy - 41,
-        BLACK
-    );
-
-    /*
-     * Olhos.
-     */
-
-    drawRect(
-        sx + (p.facing > 0 ? 2 : -5),
-        sy - 39,
-        3,
-        2,
-        RED
-    );
-
-    /*
-     * Braco.
-     */
-
-    drawRect(
-        sx + (p.facing > 0 ? 5 : -9),
-        sy - 30,
-        5,
-        13,
-        COLOR(220, 180, 145, 255)
-    );
-
-    /*
-     * Espada e animacao do golpe.
-     */
-
-    if (p.attacking) {
-        float t = p.attackTime / 0.28f;
-
-        int swordX =
-            sx + p.facing * (12 + (int)(20 * (1.0f - t)));
-
-        int swordY =
-            sy - 28 - (int)(10 * sinf(t * 3.14159f));
-
-        /*
-         * Rastro do golpe.
-         */
-
-        drawTriangle(
-            sx + p.facing * 5,
-            sy - 40,
-            sx + p.facing * 48,
-            sy - 36,
-            sx + p.facing * 42,
-            sy - 7,
-            COLOR(90, 180, 255, 130)
-        );
-
-        drawTriangle(
-            sx + p.facing * 10,
-            sy - 35,
-            sx + p.facing * 44,
-            sy - 30,
-            sx + p.facing * 35,
-            sy - 12,
-            COLOR(190, 235, 255, 220)
-        );
-
-        /*
-         * Lamina.
-         */
-
-        drawTriangle(
-            swordX,
-            swordY,
-            swordX + p.facing * 30,
-            swordY - 12,
-            swordX + p.facing * 27,
-            swordY - 5,
-            WHITE
-        );
-
-        drawRect(
-            sx + p.facing * 8,
-            sy - 28,
-            5,
-            4,
-            YELLOW
-        );
-    } else {
-        /*
-         * Espada em repouso.
-         */
-
-        drawTriangle(
-            sx + p.facing * 8,
-            sy - 24,
-            sx + p.facing * 23,
-            sy - 18,
-            sx + p.facing * 10,
-            sy - 14,
-            COLOR(185, 195, 210, 255)
-        );
-
-        drawRect(
-            sx + p.facing * 7,
-            sy - 26,
-            5,
-            4,
-            BROWN
-        );
-    }
-}
-
-/* ---------------------------------------------------------
-   INIMIGOS VISUAIS
-   --------------------------------------------------------- */
-
-static void drawEnemy(Enemy *e) {
-    int sx;
-    int sy;
-
-    if (!e->active)
-        return;
-
-    sx = (int)(e->x - cameraX);
-    sy = (int)e->y;
-
-    if (sx < -70 || sx > SW + 70)
-        return;
-
-    if (e->type == 1) {
-        /* GOLEM */
-
-        unsigned int stone =
-            e->hurtTimer > 0
-            ? WHITE
-            : COLOR(100, 105, 120, 255);
-
-        /* Pernas */
-
-        drawRect(
-            sx - 16,
-            sy - 20,
-            13,
-            20,
-            DARK_GRAY
-        );
-
-        drawRect(
-            sx + 3,
-            sy - 20,
-            13,
-            20,
-            DARK_GRAY
-        );
-
-        /* Corpo */
-
-        drawRect(
-            sx - 20,
-            sy - 48,
-            40,
-            29,
-            stone
-        );
-
-        drawRect(
-            sx - 24,
-            sy - 45,
-            8,
-            20,
-            stone
-        );
-
-        drawRect(
-            sx + 16,
-            sy - 45,
-            8,
-            20,
-            stone
-        );
-
-        /* Cabeca */
-
-        drawRect(
-            sx - 16,
-            sy - 62,
-            32,
-            16,
-            stone
-        );
-
-        /* Olhos */
-
-        drawRect(
-            sx - 10,
-            sy - 56,
-            6,
-            4,
-            RED
-        );
-
-        drawRect(
-            sx + 4,
-            sy - 56,
-            6,
-            4,
-            RED
-        );
-
-        /* Fendas da pedra */
-
-        drawRect(
-            sx - 5,
-            sy - 42,
-            3,
-            10,
-            DARK_GRAY
-        );
-
-        drawRect(
-            sx + 7,
-            sy - 36,
-            3,
-            8,
-            DARK_GRAY
-        );
-    } else {
-        /* ZUMBI */
-
-        unsigned int skin =
-            e->hurtTimer > 0
-            ? WHITE
-            : COLOR(75, 150, 85, 255);
-
-        drawRect(
-            sx - 8,
-            sy - 15,
-            6,
-            15,
-            DARK_GRAY
-        );
-
-        drawRect(
-            sx + 2,
-            sy - 15,
-            6,
-            15,
-            DARK_GRAY
-        );
-
-        drawRect(
-            sx - 9,
-            sy - 30,
-            18,
-            17,
-            COLOR(60, 80, 65, 255)
-        );
-
-        drawRect(
-            sx - 7,
-            sy - 40,
-            14,
-            11,
-            skin
-        );
-
-        drawRect(
-            sx - 6,
-            sy - 39,
-            4,
-            3,
-            RED
-        );
-
-        drawRect(
-            sx + 2,
-            sy - 39,
-            4,
-            3,
-            RED
-        );
-
-        drawRect(
-            sx + (e->facing > 0 ? 5 : -11),
-            sy - 29,
-            6,
-            14,
-            skin
-        );
-    }
+    if (p.x > 4250.0f)
+        bossStarted = 1;
 }
 
 /* ---------------------------------------------------------
    INTERFACE
    --------------------------------------------------------- */
 
-static void drawHealthBar(
-    int x,
-    int y,
-    int width,
-    int height,
-    int hp,
-    int maxhp,
-    unsigned int color
-) {
-    int filled;
-
-    if (maxhp <= 0)
-        return;
-
-    if (hp < 0)
-        hp = 0;
-
-    if (hp > maxhp)
-        hp = maxhp;
-
-    filled = width * hp / maxhp;
-
-    drawRect(
-        x - 1,
-        y - 1,
-        width + 2,
-        height + 2,
-        BLACK
-    );
-
-    drawRect(
-        x,
-        y,
-        width,
-        height,
-        DARK_RED
-    );
-
-    drawRect(
-        x,
-        y,
-        filled,
-        height,
-        color
-    );
-}
-
-static void drawHUD(void) {
+static void drawHUD(void)
+{
     int i;
-    Enemy *boss = 0;
 
-    drawHealthBar(
-        10,
-        10,
-        120,
-        10,
-        p.hp,
-        p.maxhp,
-        GREEN
-    );
+    drawRect(8, 8, 84, 12, BLACK);
+    drawRect(10, 10, 80.0f * p.hp / p.maxhp,
+             8, GREEN);
 
-    /*
-     * Indicador da zona.
-     */
+    for (i = 0; i < 3; i++)
+        drawCircle(16.0f + i * 13.0f, 34.0f,
+                   4.0f, i == 0 ? PURPLE : GRAY);
 
-    if (currentZone == 0) {
-        drawRect(
-            365,
-            10,
-            105,
-            18,
-            COLOR(35, 35, 65, 255)
-        );
+    /* Marcador da posicao no mundo */
+    drawRect(8, 48, 100, 3, GRAY);
+    drawRect(8 + 100.0f * p.x / WORLD_W,
+             46, 4, 7, WHITE);
 
-        drawRect(
-            371,
-            16,
-            8,
-            6,
-            PURPLE
-        );
-
-        drawRect(
-            383,
-            16,
-            70,
-            3,
-            WHITE
-        );
-    } else {
-        drawRect(
-            365,
-            10,
-            105,
-            18,
-            COLOR(20, 65, 40, 255)
-        );
-
-        drawRect(
-            371,
-            16,
-            8,
-            6,
-            GREEN
-        );
-
-        drawRect(
-            383,
-            16,
-            70,
-            3,
-            WHITE
-        );
+    if (gameOver) {
+        drawRect(100, 100, 280, 60, BLACK);
+        drawLine(100, 100, 380, 100, RED);
+        drawLine(100, 160, 380, 160, RED);
     }
 
-    /*
-     * Barra do chefe quando estiver perto.
-     */
-
-    for (i = 0; i < MAX_ENEMIES; i++) {
-        if (enemies[i].active &&
-            enemies[i].type == 1 &&
-            fabsf(enemies[i].x - p.x) < 500) {
-
-            boss = &enemies[i];
-            break;
-        }
-    }
-
-    if (boss) {
-        drawHealthBar(
-            115,
-            34,
-            250,
-            10,
-            boss->hp,
-            boss->maxhp,
-            RED
-        );
+    if (victory) {
+        drawRect(100, 100, 280, 60, BLACK);
+        drawLine(100, 100, 380, 100, GOLD);
+        drawLine(100, 160, 380, 160, GOLD);
     }
 }
 
 /* ---------------------------------------------------------
-   RENDERIZACAO COMPLETA
+   INICIALIZACAO GRAFICA PSP
    --------------------------------------------------------- */
 
-static void drawWorld(void) {
-    int i;
+static unsigned int __attribute__((aligned(16))) list[262144];
 
-    drawBackground();
-
-    drawPlatforms();
-
-    for (i = 0; i < MAX_ENEMIES; i++)
-        drawEnemy(&enemies[i]);
-
-    drawMagic();
-
-    drawParticles();
-
-    drawPlayer();
-
-    drawHUD();
-}
-
-/* ---------------------------------------------------------
-   INICIALIZACAO GRAFICA
-   --------------------------------------------------------- */
-
-static void graphicsInit(void) {
+static void initGraphics(void)
+{
     sceGuInit();
 
-    sceGuStart(
-        GU_DIRECT,
-        list
-    );
+    sceGuStart(GU_DIRECT, list);
 
-    sceGuDrawBuffer(
-        GU_PSM_8888,
-        (void *)0,
-        512
-    );
+    sceGuDrawBuffer(GU_PSM_8888,
+                    (void *)0, 512);
+    sceGuDispBuffer(SCREEN_W, SCREEN_H,
+                    (void *)(512 * 272 * 4), 512);
+    sceGuDepthBuffer((void *)(512 * 272 * 8), 512);
 
-    sceGuDispBuffer(
-        SW,
-        SH,
-        (void *)(512 * 272 * 4),
-        512
-    );
+    sceGuOffset(2048 - SCREEN_W / 2,
+                2048 - SCREEN_H / 2);
+    sceGuViewport(2048, 2048, SCREEN_W, SCREEN_H);
 
-    sceGuDepthBuffer(
-        (void *)(512 * 272 * 8),
-        512
-    );
-
-    sceGuOffset(
-        2048 - (SW / 2),
-        2048 - (SH / 2)
-    );
-
-    sceGuViewport(
-        2048,
-        2048,
-        SW,
-        SH
-    );
-
-    sceGuDepthRange(
-        0,
-        65535
-    );
-
-    sceGuScissor(
-        0,
-        0,
-        SW,
-        SH
-    );
-
+    sceGuDepthRange(0xc350, 0x2710);
+    sceGuScissor(0, 0, SCREEN_W, SCREEN_H);
     sceGuEnable(GU_SCISSOR_TEST);
-
     sceGuDisable(GU_DEPTH_TEST);
-    sceGuDisable(GU_CULL_FACE);
     sceGuDisable(GU_TEXTURE_2D);
-    sceGuDisable(GU_BLEND);
-
-    sceGuClearColor(BLACK);
-
-    sceGuClear(
-        GU_COLOR_BUFFER_BIT |
-        GU_DEPTH_BUFFER_BIT
-    );
+    sceGuShadeModel(GU_FLAT);
 
     sceGuFinish();
-
-    sceGuSync(
-        0,
-        0
-    );
+    sceGuSync(0, 0);
 
     sceDisplayWaitVblankStart();
-
     sceGuDisplay(GU_TRUE);
 }
 
-/* ---------------------------------------------------------
-   ENCERRAMENTO
-   --------------------------------------------------------- */
+static void renderFrame(void)
+{
+    int i;
 
-static int exitCallback(
-    int arg1,
-    int arg2,
-    void *common
-) {
-    (void)arg1;
-    (void)arg2;
-    (void)common;
+    sceGuStart(GU_DIRECT, list);
 
-    gameRunning = 0;
+    sceGuClearColor(BLACK);
+    sceGuClear(GU_COLOR_BUFFER_BIT);
 
-    return 0;
-}
+    sceGuDisable(GU_TEXTURE_2D);
 
-static int callbackThread(
-    SceSize args,
-    void *argp
-) {
-    int cbid;
+    drawCaveScene();
+    drawZombies();
+    drawMagic();
 
-    (void)args;
-    (void)argp;
+    if (bossStarted)
+        drawBoss();
 
-    cbid = sceKernelCreateCallback(
-        "Exit Callback",
-        exitCallback,
-        0
-    );
+    drawPlayer();
+    drawHUD();
 
-    sceKernelRegisterExitCallback(cbid);
+    sceGuFinish();
+    sceGuSync(0, 0);
 
-    sceKernelSleepThreadCB();
+    sceDisplayWaitVblankStart();
+    sceGuSwapBuffers();
 
-    return 0;
-}
-
-static int setupCallbacks(void) {
-    int thid;
-
-    thid = sceKernelCreateThread(
-        "Callback Thread",
-        callbackThread,
-        0x11,
-        0xFA0,
-        0,
-        0
-    );
-
-    if (thid >= 0)
-        sceKernelStartThread(thid, 0, 0);
-
-    return thid;
+    (void)i;
 }
 
 /* ---------------------------------------------------------
-   LOOP PRINCIPAL
+   REINICIO E LOOP PRINCIPAL
    --------------------------------------------------------- */
 
-int main(int argc, char *argv[]) {
-    SceCtrlData pad;
-    SceCtrlData oldPad;
+static void resetGame(void)
+{
+    cameraX = 0.0f;
+    gameTime = 0.0f;
+    gameOver = 0;
+    victory = 0;
+    bossStarted = 0;
+    attackFlash = 0;
 
-    unsigned long long lastTime;
-    unsigned long long currentTime;
-
-    float dt;
-
-    (void)argc;
-    (void)argv;
-
-    setupCallbacks();
-
-    sceCtrlSetSamplingCycle(0);
-
-    sceCtrlSetSamplingMode(
-        PSP_CTRL_MODE_ANALOG
-    );
-
-    memset(&oldPad, 0, sizeof(oldPad));
-
-    memset(magic, 0, sizeof(magic));
-    memset(particles, 0, sizeof(particles));
+    memset(bolts, 0, sizeof(bolts));
 
     initPlayer();
-    initEnemies();
+    initCave();
+    initZombies();
+    initBoss();
+}
 
-    graphicsInit();
+int main(void)
+{
+    SceCtrlData pad;
+    unsigned int buttons;
+    unsigned int pressed;
+    unsigned long long lastTick;
+    unsigned long long nowTick;
+    float dt;
 
-    lastTime = sceKernelGetSystemTimeWide();
+    sceCtrlSetSamplingCycle(0);
+    sceCtrlSetSamplingMode(PSP_CTRL_MODE_ANALOG);
 
-    while (gameRunning) {
-        sceCtrlReadBufferPositive(
-            &pad,
-            1
-        );
+    pspDebugScreenInit();
 
-        if (pad.Buttons & PSP_CTRL_START) {
-            gameRunning = 0;
-            break;
+    initGraphics();
+    resetGame();
+
+    lastTick = sceKernelGetSystemTimeWide();
+
+    while (1) {
+        sceCtrlReadBufferPositive(&pad, 1);
+        buttons = pad.Buttons;
+        pressed = buttons & ~previousButtons;
+        previousButtons = buttons;
+
+        if (pressed & PSP_CTRL_START)
+            resetGame();
+
+        nowTick = sceKernelGetSystemTimeWide();
+        dt = (float)(nowTick - lastTick) / 1000000.0f;
+        lastTick = nowTick;
+
+        /* Evita saltos grandes si o jogo travar por um instante. */
+        dt = clampf(dt, 0.0f, 0.04f);
+        gameTime += dt;
+
+        if (!gameOver && !victory) {
+            updatePlayer(dt, buttons);
+            updateZombies(dt);
+            updateMagic(dt);
+
+            if (pressed & PSP_CTRL_SQUARE)
+                playerAttack();
+
+            if (pressed & PSP_CTRL_CIRCLE)
+                castMagic();
+
+            if (p.hp <= 0) {
+                p.hp = 0;
+                gameOver = 1;
+            }
+
+            /* Camera acompanha o personagem */
+            cameraX = p.x - SCREEN_W * 0.42f;
+            cameraX = clampf(cameraX, 0.0f,
+                             WORLD_W - SCREEN_W);
+
+            if (bossStarted)
+                updateBoss(dt);
         }
 
-        currentTime =
-            sceKernelGetSystemTimeWide();
-
-        dt =
-            (float)(currentTime - lastTime) /
-            1000000.0f;
-
-        lastTime = currentTime;
-
-        /*
-         * Evita saltos gigantes de fisica
-         * se o jogo sofrer uma queda de FPS.
-         */
-
-        if (dt > 0.04f)
-            dt = 0.04f;
-
-        if (dt < 0.001f)
-            dt = 0.001f;
-
-        updatePlayer(
-            dt,
-            &pad,
-            &oldPad
-        );
-
-        updateEnemies(dt);
-
-        updateMagic(dt);
-
-        updateParticles(dt);
-
-        updateCamera();
-
-        /*
-         * Renderizacao.
-         */
-
-        sceGuStart(
-            GU_DIRECT,
-            list
-        );
-
-        sceGuClearColor(BLACK);
-
-        sceGuClear(
-            GU_COLOR_BUFFER_BIT |
-            GU_DEPTH_BUFFER_BIT
-        );
-
-        drawWorld();
-
-        sceGuFinish();
-
-        sceGuSync(
-            0,
-            0
-        );
-
-        sceDisplayWaitVblankStart();
-
-        sceGuSwapBuffers();
-
-        oldPad = pad;
-
-        /*
-         * Derrota.
-         */
-
-        if (p.hp <= 0) {
-            gameRunning = 0;
-        }
+        renderFrame();
     }
 
     sceGuTerm();
-
     sceKernelExitGame();
-
     return 0;
 }
