@@ -1,7 +1,9 @@
+
 TARGET = RANDOM
 OBJS = src/main.o
 
 INCDIR =
+
 CFLAGS = -O2 -G0 -Wall
 CXXFLAGS = $(CFLAGS) -fno-exceptions -fno-rtti
 ASFLAGS = $(CFLAGS)
