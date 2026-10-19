@@ -798,52 +798,153 @@ static void drawUpgradeMenu(void)
 }
 
 /* =====================================================
-   PERSONAGEM TEMPORARIO
-   O DESIGN SERA SUBSTITUIDO DEPOIS.
+   PROTAGONISTA DESENHADO EM C
+   Sem PNG, JPG, GIF ou sprites externos.
    ===================================================== */
+
+#define HERO_OUTLINE 0xFF101018
+#define HERO_HAIR    0xFF15151F
+#define HERO_RED     0xFFB51F32
+#define HERO_RED2    0xFF731323
+#define HERO_SKIN    0xFFE6C5B0
+#define HERO_CLOTH   0xFF20202A
+#define HERO_CLOTH2  0xFF373744
+#define HERO_WHITE   0xFFE5E5EB
+#define HERO_EYE     0xFFFF263F
+
+static void heroRect(float x, float y, float w, float h, Color c)
+{
+    rect(x,y,w,h,c);
+}
+
+static void drawHeroHead(float x, float y, int frame)
+{
+    /* Contorno e rosto */
+    heroRect(x+4,y+1,13,12,HERO_OUTLINE);
+    heroRect(x+5,y+2,11,10,HERO_SKIN);
+    heroRect(x+4,y+2,3,5,HERO_HAIR);
+    heroRect(x+7,y,9,3,HERO_HAIR);
+    heroRect(x+13,y+2,5,4,HERO_HAIR);
+
+    /* Franja */
+    heroRect(x+5,y+1,4,5,HERO_HAIR);
+    heroRect(x+8,y+2,4,4,HERO_HAIR);
+    heroRect(x+11,y+1,3,5,HERO_HAIR);
+
+    /* Olhos vermelhos */
+    if (playerFacing > 0) {
+        heroRect(x+13,y+6,3,2,HERO_EYE);
+        heroRect(x+15,y+6,1,2,HERO_WHITE);
+    } else {
+        heroRect(x+6,y+6,3,2,HERO_EYE);
+        heroRect(x+6,y+6,1,2,HERO_WHITE);
+    }
+
+    /* Sombra do rosto */
+    heroRect(x+7,y+10,7,1,0xFFB58F80);
+
+    /* Mechas que se movem durante a corrida */
+    if (frame == 1) {
+        heroRect(x+1,y+3,5,3,HERO_HAIR);
+        heroRect(x+2,y+6,4,2,HERO_HAIR);
+    } else if (frame == 2) {
+        heroRect(x+2,y+1,4,3,HERO_HAIR);
+        heroRect(x+1,y+4,4,3,HERO_HAIR);
+    }
+}
+
+static void drawHeroBody(float x, float y, int frame)
+{
+    /* Casaco preto */
+    heroRect(x+3,y,14,12,HERO_OUTLINE);
+    heroRect(x+5,y+1,10,10,HERO_CLOTH);
+    heroRect(x+4,y+2,3,8,HERO_CLOTH2);
+    heroRect(x+13,y+2,3,8,HERO_CLOTH2);
+
+    /* Gola vermelha */
+    heroRect(x+7,y,6,3,HERO_RED);
+    heroRect(x+8,y+3,4,2,HERO_RED2);
+
+    /* Linha vermelha central */
+    heroRect(x+9,y+4,2,6,HERO_RED);
+
+    /* Braços animados */
+    if (frame == 1) {
+        heroRect(x+1,y+2,4,7,HERO_CLOTH);
+        heroRect(x+15,y+4,5,5,HERO_CLOTH);
+        heroRect(x,y+8,4,3,HERO_SKIN);
+        heroRect(x+18,y+7,3,3,HERO_SKIN);
+    } else if (frame == 2) {
+        heroRect(x+1,y+4,5,5,HERO_CLOTH);
+        heroRect(x+15,y+2,4,7,HERO_CLOTH);
+        heroRect(x+2,y+8,3,3,HERO_SKIN);
+        heroRect(x+17,y+8,3,3,HERO_SKIN);
+    } else {
+        heroRect(x+1,y+3,4,7,HERO_CLOTH);
+        heroRect(x+15,y+3,4,7,HERO_CLOTH);
+        heroRect(x+1,y+9,3,2,HERO_SKIN);
+        heroRect(x+16,y+9,3,2,HERO_SKIN);
+    }
+}
+
+static void drawHeroLegs(float x, float y, int frame)
+{
+    /* Calcas escuras */
+    if (frame == 1) {
+        heroRect(x+5,y,5,7,HERO_CLOTH);
+        heroRect(x+11,y+1,5,6,HERO_CLOTH2);
+        heroRect(x+3,y+6,7,3,HERO_WHITE);
+        heroRect(x+11,y+6,6,3,HERO_WHITE);
+    } else if (frame == 2) {
+        heroRect(x+5,y+1,5,6,HERO_CLOTH2);
+        heroRect(x+11,y,5,7,HERO_CLOTH);
+        heroRect(x+4,y+6,6,3,HERO_WHITE);
+        heroRect(x+11,y+6,7,3,HERO_WHITE);
+    } else {
+        heroRect(x+5,y,5,8,HERO_CLOTH);
+        heroRect(x+11,y,5,8,HERO_CLOTH);
+        heroRect(x+4,y+7,7,2,HERO_WHITE);
+        heroRect(x+10,y+7,7,2,HERO_WHITE);
+    }
+}
 
 static void drawPlayer(void)
 {
     float x = playerX - cameraX;
     float y = playerY;
-    int walk;
+    int frame;
 
     if (invulnerability > 0 && (invulnerability / 4) % 2)
         return;
 
     if (!grounded)
-        walk = 2;
-    else if ((playerFrame / 8) % 2)
-        walk = 1;
+        frame = 2;
+    else if ((playerFrame / 7) % 2)
+        frame = 1;
     else
-        walk = 0;
+        frame = 0;
 
-    rect(x-2,y+PLAYER_H,22,3,DARK);
-    rect(x+4,y,10,10,WHITE);
-    rect(x+3,y,12,3,LIGHT);
+    /* Sombra no chao */
+    rect(x-2,y+PLAYER_H,23,2,DARK);
 
-    if (playerFacing > 0)
-        rect(x+10,y+4,2,2,BLACK);
-    else
-        rect(x+5,y+4,2,2,BLACK);
+    /*
+     * Personagem de 19x30 pixels:
+     * cabelo preto, olhos vermelhos, roupa escura
+     * e detalhes vermelhos e brancos.
+     */
+    drawHeroHead(x,y,frame);
+    drawHeroBody(x,y+12,frame);
+    drawHeroLegs(x,y+21,frame);
 
-    rect(x+3,y+10,12,11,LIGHT);
-
-    if (walk == 1) {
-        rect(x-1,y+12,4,7,GRAY);
-        rect(x+15,y+10,4,7,GRAY);
-        rect(x+2,y+21,5,8,WHITE);
-        rect(x+11,y+22,5,7,LIGHT);
-    } else if (walk == 2) {
-        rect(x,y+11,4,8,GRAY);
-        rect(x+15,y+11,4,8,GRAY);
-        rect(x+2,y+21,5,6,WHITE);
-        rect(x+11,y+21,5,6,WHITE);
-    } else {
-        rect(x,y+11,4,8,GRAY);
-        rect(x+15,y+11,4,8,GRAY);
-        rect(x+3,y+21,5,9,WHITE);
-        rect(x+10,y+21,5,9,WHITE);
+    /* Efeito de dash */
+    if (dashFrames > 0) {
+        if (playerFacing > 0) {
+            rect(x-8,y+8,7,3,HERO_RED);
+            rect(x-13,y+13,10,2,HERO_WHITE);
+        } else {
+            rect(x+PLAYER_W+1,y+8,7,3,HERO_RED);
+            rect(x+PLAYER_W+3,y+13,10,2,HERO_WHITE);
+        }
     }
 }
 
