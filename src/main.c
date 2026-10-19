@@ -26,18 +26,20 @@ typedef struct { float x,y,w,h; } Box;
 
 static unsigned int __attribute__((aligned(16))) list[262144];
 
-/* Paleta */
-#define BLACK  0xFF101018
-#define DARK   0xFF252535
-#define STONE  0xFF555568
-#define GRAY   0xFF858596
-#define LIGHT  0xFFBFC4D0
+/* PALETA MONOCROMATICA */
+#define BLACK  0xFF101010
+#define DARK   0xFF303030
+#define STONE  0xFF505050
+#define GRAY   0xFF858585
+#define LIGHT  0xFFBFBFBF
 #define WHITE  0xFFFFFFFF
-#define PURPLE 0xFFB050E8
-#define RED    0xFF3030E8
-#define YELLOW 0xFF30E8F8
-#define GREEN  0xFF35B85A
-#define BLUE   0xFFFFA040
+
+/* Aliases para preservar compatibilidade com o restante do codigo */
+#define PURPLE GRAY
+#define RED    WHITE
+#define YELLOW WHITE
+#define GREEN  GRAY
+#define BLUE   LIGHT
 
 static float px=60, py=220, vy=0, cam=0;
 static int face=1, jumps=2, hp=5, maxHP=5;
@@ -45,18 +47,16 @@ static int magic=0, magicCD=0, swordCD=0;
 static int xp=0, level=1, nextXP=20;
 static int bossHP=20, bossActive=1, bossStarted=0;
 static int gameMode=0, menuChoice=0, dialogStep=0;
-static int paused=0;
 
 enum { MENU, GAME, DIALOG, PAUSE, WIN };
 
-static void rect(float x,float y,float w,float h,Color c);
-static void text5(int x,int y,const char *s,Color c,int scale);
+static int bossTimer=0;
 
 static int pressed(unsigned int n,unsigned int o,unsigned int b) {
     return (n&b)&&!(o&b);
 }
 
-/* Fonte bitmap 5x7: A-Z, 0-9 e espaco */
+/* FONTE BITMAP 5x7: A-Z E 0-9 */
 static const unsigned char font5x7[36][7]={
 {14,17,17,31,17,17,17},{30,17,17,30,17,17,30},
 {14,17,16,16,16,17,14},{30,17,17,17,17,17,30},
@@ -82,6 +82,8 @@ static void rect(float x,float y,float w,float h,Color c) {
     if(w<=0 || h<=0) return;
 
     Vtx *v=(Vtx*)sceGuGetMemory(2*sizeof(Vtx));
+    if(!v) return;
+
     v[0]=(Vtx){c,x,y,0};
     v[1]=(Vtx){c,x+w,y+h,0};
 
@@ -153,7 +155,7 @@ static void drawMenu(void) {
     rect(24,24,432,224,BLACK);
 
     text5(135,42,"RANDOM ALPHA",WHITE,3);
-    text5(152,77,"CAVERNA",GRAY,2);
+    text5(152,77,"CAVERNA",LIGHT,2);
 
     const char *opts[3]={"JOGAR","CONTINUAR","SAIR"};
 
@@ -175,7 +177,7 @@ static void drawDialog(void) {
 
     if(dialogStep==0) {
         text5(30,190,"VOCE ENTROU NA CAVERNA",WHITE,1);
-        text5(30,204,"ENCONTRE O CRISTAL ROXO",LIGHT,1);
+        text5(30,204,"ENCONTRE O CRISTAL",LIGHT,1);
     } else if(dialogStep==1) {
         text5(30,190,"VOCE DESPERTOU A MAGIA",WHITE,1);
         text5(30,204,"CIRCULO LANCAR MAGIA",LIGHT,1);
@@ -184,20 +186,38 @@ static void drawDialog(void) {
         text5(30,204,"DERROTE O CHEFE DA CAVERNA",LIGHT,1);
     }
 
-    text5(340,235,"X CONTINUAR",YELLOW,1);
+    text5(340,235,"X CONTINUAR",WHITE,1);
 }
 
 static void drawPlayer(void) {
     float x=px-cam;
 
-    /* Personagem provisório desenhado em preto e branco */
+    /* Cabeca e corpo em tons de cinza */
     rect(x+4,py+2,10,12,WHITE);
     rect(x+2,py+13,14,13,GRAY);
-    rect(x,py+25,7,5,WHITE);
-    rect(x+11,py+25,7,5,WHITE);
 
-    /* Espada */
-    rect(x+(face?13:-7),py+15,12,3,WHITE);
+    /* Botas */
+    rect(x,py+25,7,5,LIGHT);
+    rect(x+11,py+25,7,5,LIGHT);
+
+    /* Olho voltado para a direcao do movimento */
+    if(face)
+        rect(x+11,py+6,2,2,BLACK);
+    else
+        rect(x+5,py+6,2,2,BLACK);
+
+    /* Espada: lamina, fio, guarda e cabo */
+    if(face) {
+        rect(x+15,py+13,15,3,WHITE);
+        rect(x+18,py+12,10,1,LIGHT);
+        rect(x+13,py+10,3,9,GRAY);
+        rect(x+10,py+13,4,3,DARK);
+    } else {
+        rect(x-12,py+13,15,3,WHITE);
+        rect(x-10,py+12,10,1,LIGHT);
+        rect(x+2,py+10,3,9,GRAY);
+        rect(x+5,py+13,4,3,DARK);
+    }
 }
 
 static void drawScene(void) {
@@ -215,7 +235,7 @@ static void drawScene(void) {
     wr(0,GROUND,WW,22,GRAY);
     wr(0,GROUND+22,WW,20,BLACK);
 
-    /* Plataformas e paredes */
+    /* Plataformas e obstaculos */
     wr(190,190,100,10,WHITE);
     wr(310,145,12,105,GRAY);
     wr(430,160,110,10,WHITE);
@@ -229,20 +249,23 @@ static void drawScene(void) {
     wr(1300,235,150,15,WHITE);
 
     /* Cristal que libera magia */
-    wr(713,107,24,10,PURPLE);
-    wr(720,100,10,24,PURPLE);
-    wr(718,102,14,20,WHITE);
+    if(!magic) {
+        wr(713,107,24,10,GRAY);
+        wr(720,100,10,24,LIGHT);
+        wr(718,102,14,20,WHITE);
+    }
 
-    /* Porta da arena do chefe */
+    /* Entrada da arena */
     wr(1450,140,12,110,GRAY);
     wr(1470,140,12,110,GRAY);
     wr(1450,140,32,8,WHITE);
 
-    /* Chefe */
+    /* Guardiao da Caverna */
     if(bossActive) {
-        wr(1350,215,36,32,WHITE);
-        wr(1355,222,7,6,BLACK);
-        wr(1373,222,7,6,BLACK);
+        wr(1350,205,36,42,WHITE);
+        wr(1355,214,7,6,BLACK);
+        wr(1373,214,7,6,BLACK);
+        wr(1358,232,20,3,GRAY);
 
         rect(335,8,135,8,DARK);
         rect(337,10,131.0f*bossHP/20.0f,4,WHITE);
@@ -258,7 +281,7 @@ static void drawScene(void) {
 
     text5(8,32,"XP",WHITE,1);
     rect(8,43,80,4,DARK);
-    rect(8,43,80.0f*xp/(nextXP?nextXP:1),4,GRAY);
+    rect(8,43,80.0f*xp/(nextXP?nextXP:1),4,LIGHT);
 
     text5(100,8,"NIVEL",WHITE,1);
 
@@ -268,7 +291,8 @@ static void drawScene(void) {
     if(px>1180 && bossActive)
         text5(130,55,"GUARDIAO DA CAVERNA",WHITE,1);
 
-    if(gameMode==DIALOG) drawDialog();
+    if(gameMode==DIALOG)
+        drawDialog();
 
     if(gameMode==PAUSE) {
         rect(100,70,280,120,BLACK);
@@ -280,6 +304,7 @@ static void drawScene(void) {
 
     if(gameMode==WIN) {
         rect(30,70,420,130,BLACK);
+        rect(30,70,420,3,WHITE);
         text5(125,92,"GUARDIAO DERROTADO",WHITE,2);
         text5(105,125,"FIM DO PROTOTIPO",WHITE,1);
         text5(125,150,"START MENU",WHITE,1);
@@ -291,19 +316,38 @@ static void resetGame(void) {
     py=GROUND-PH;
     vy=0;
     cam=0;
+    face=1;
+
     hp=maxHP;
     xp=0;
     level=1;
     nextXP=20;
+
     magic=0;
     magicCD=0;
     swordCD=0;
+
     bossHP=20;
     bossActive=1;
     bossStarted=0;
+    bossTimer=0;
+
     jumps=2;
     gameMode=DIALOG;
     dialogStep=0;
+}
+
+static void damageBoss(int damage) {
+    if(!bossActive) return;
+
+    bossHP-=damage;
+
+    if(bossHP<=0) {
+        bossHP=0;
+        bossActive=0;
+        addXP(50);
+        gameMode=WIN;
+    }
 }
 
 static void updateGame(SceCtrlData p,unsigned int old) {
@@ -325,8 +369,9 @@ static void updateGame(SceCtrlData p,unsigned int old) {
     if(px<0) px=0;
     if(px>WW-PW) px=WW-PW;
 
+    /* Pulo um pouco mais alto que a versao anterior */
     if(pressed(p.Buttons,old,PSP_CTRL_CROSS)&&jumps>0) {
-        vy=-6.3f;
+        vy=-6.7f;
         jumps--;
     }
 
@@ -339,47 +384,54 @@ static void updateGame(SceCtrlData p,unsigned int old) {
         jumps=2;
     }
 
+    if(py<0) {
+        py=0;
+        if(vy<0) vy=0;
+    }
+
     if(magicCD>0) magicCD--;
     if(swordCD>0) swordCD--;
 
-    /* Pegar cristal */
+    /* Coletar cristal */
     if(!magic && hit(playerBox(),(Box){713,100,24,24})) {
         magic=1;
         gameMode=DIALOG;
         dialogStep=1;
     }
 
-    /* Entrada na arena */
+    /* Entrada na arena do chefe */
     if(px>1180 && !bossStarted) {
         bossStarted=1;
         gameMode=DIALOG;
         dialogStep=2;
     }
 
-    /* Movimento simples do chefe */
-    if(bossActive) {
-        if(fabsf(px-1350)<250 && bossHP>0) {
-            static int bossTimer=0;
-            bossTimer++;
+    /* Dano do chefe ao jogador quando estiver perto */
+    if(bossActive && fabsf(px-1350)<90) {
+        bossTimer++;
 
-            if(bossTimer>90) {
-                bossTimer=0;
-                hp--;
+        if(bossTimer>=90) {
+            bossTimer=0;
+            hp--;
+
+            if(hp<=0) {
+                hp=maxHP;
+                px=60;
+                py=GROUND-PH;
+                vy=0;
+                cam=0;
+                jumps=2;
             }
         }
-
-        if(hp<=0) {
-            hp=maxHP;
-            px=60;
-            py=GROUND-PH;
-            cam=0;
-        }
+    } else {
+        bossTimer=0;
     }
 
     if(!bossActive && bossStarted)
         gameMode=WIN;
 
     cam=px-SW/2;
+
     if(cam<0) cam=0;
     if(cam>WW-SW) cam=WW-SW;
 }
@@ -399,6 +451,7 @@ int main(void) {
     sceGuViewport(2048,2048,SW,SH);
     sceGuDepthRange(65535,0);
     sceGuScissor(0,0,SW,SH);
+
     sceGuEnable(GU_SCISSOR_TEST);
     sceGuDisable(GU_DEPTH_TEST);
     sceGuDisable(GU_TEXTURE_2D);
@@ -410,6 +463,8 @@ int main(void) {
 
     SceCtrlData p;
     unsigned int old=0;
+
+    gameMode=MENU;
 
     while(1) {
         sceCtrlReadBufferPositive(&p,1);
@@ -431,11 +486,7 @@ int main(void) {
         } else if(gameMode==DIALOG) {
             if(pressed(p.Buttons,old,PSP_CTRL_CROSS) ||
                pressed(p.Buttons,old,PSP_CTRL_CIRCLE)) {
-                if(dialogStep==0 || dialogStep==1) {
-                    gameMode=GAME;
-                } else {
-                    gameMode=GAME;
-                }
+                gameMode=GAME;
             }
         } else if(gameMode==PAUSE) {
             if(pressed(p.Buttons,old,PSP_CTRL_START))
@@ -444,8 +495,10 @@ int main(void) {
             if(pressed(p.Buttons,old,PSP_CTRL_SELECT)) {
                 px=60;
                 py=GROUND-PH;
+                vy=0;
                 hp=maxHP;
                 cam=0;
+                jumps=2;
                 gameMode=GAME;
             }
         } else if(gameMode==WIN) {
@@ -457,31 +510,20 @@ int main(void) {
             if(pressed(p.Buttons,old,PSP_CTRL_START)) {
                 gameMode=PAUSE;
             } else {
+                /* Magia: botao CIRCULO */
                 if(pressed(p.Buttons,old,PSP_CTRL_CIRCLE) &&
                    magic && magicCD==0) {
-                    /* Magia causa dano ao chefe */
-                    if(bossActive && px>1250 && px<1430) {
-                        bossHP-=3;
-                        if(bossHP<=0) {
-                            bossHP=0;
-                            bossActive=0;
-                            addXP(50);
-                            gameMode=WIN;
-                        }
-                    }
+                    if(bossActive && px>1250 && px<1430)
+                        damageBoss(3);
+
                     magicCD=25;
                 }
 
+                /* Espada: botao QUADRADO */
                 if((p.Buttons&PSP_CTRL_SQUARE) && swordCD==0) {
-                    if(bossActive && px>1310 && px<1410) {
-                        bossHP-=2;
-                        if(bossHP<=0) {
-                            bossHP=0;
-                            bossActive=0;
-                            addXP(50);
-                            gameMode=WIN;
-                        }
-                    }
+                    if(bossActive && px>1310 && px<1410)
+                        damageBoss(2);
+
                     swordCD=15;
                 }
 
@@ -493,11 +535,10 @@ int main(void) {
         sceGuClearColor(BLACK);
         sceGuClear(GU_COLOR_BUFFER_BIT|GU_DEPTH_BUFFER_BIT);
 
-        if(gameMode==MENU) {
+        if(gameMode==MENU)
             drawMenu();
-        } else {
+        else
             drawScene();
-        }
 
         sceGuFinish();
         sceGuSync(0,0);
