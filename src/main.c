@@ -62,6 +62,15 @@ static void doorway(int x,int y,int w,int h) {
     R(x+12,y+12,w-24,h-12,BLACK);
 }
 static void platform(int x,int y,int w) { R(x,y,w,7,LIGHT); R(x,y+7,w,4,DARK); }
+/* Corredores reais: o vazio central e ladeado por paredes claras. */
+static void corridorH(int x,int y,int w,int h) {
+    R(x,y,w,5,MID); R(x,y+h-5,w,5,MID);
+    R(x,y+5,w,h-10,BLACK);
+}
+static void corridorV(int x,int y,int w,int h) {
+    R(x,y,5,h,MID); R(x+w-5,y,5,h,MID);
+    R(x+5,y,w-10,h,BLACK);
+}
 static void caveRoom(int x,int y,int w,int h) {
     R(x,y,w,8,MID); R(x,y,8,h,MID); R(x+w-8,y,8,h,MID); R(x,y+h-8,w,8,MID);
     /* Pequenas quebras na pedra, sem excesso de detalhe. */
@@ -78,11 +87,32 @@ static void drawCave(void) {
     caveRoom(65,730,360,190);
     caveRoom(440,750,370,200);
     caveRoom(245,970,370,200);
-    /* Passagens entre as câmaras. */
-    R(420,232,55,35,BLACK); R(340,250,50,35,BLACK);
-    R(350,440,55,45,BLACK); R(565,450,45,40,BLACK);
-    R(300,680,55,50,BLACK); R(580,700,45,40,BLACK);
-    R(360,900,70,55,BLACK); R(520,950,55,35,BLACK);
+    /* Corredores abertos que atravessam as paredes das salas.
+       Cada corredor tem um vao preto e bordas de pedra visiveis. */
+    corridorV(420,225,42,72);
+    corridorH(350,285,95,38);
+    corridorV(350,430,42,78);
+    corridorH(505,440,105,38);
+    corridorV(300,665,42,82);
+    corridorH(335,700,115,38);
+    corridorV(560,690,42,82);
+    corridorH(390,895,105,38);
+    corridorV(520,930,42,78);
+    corridorH(430,1010,105,36);
+    /* Tunel principal em zigue-zague conectando os niveis. */
+    corridorV(445,225,36,110);
+    corridorH(370,315,120,34);
+    corridorV(370,315,36,150);
+    corridorH(370,445,155,34);
+    corridorV(490,445,36,145);
+    corridorH(330,555,195,34);
+    corridorV(330,555,36,175);
+    corridorH(330,700,150,34);
+    corridorV(445,700,36,135);
+    corridorH(400,805,120,34);
+    corridorV(485,805,36,145);
+    corridorH(400,920,120,34);
+    corridorV(400,920,36,130);
     /* Plataformas alternadas para sugerir subida e descida pelo labirinto. */
     platform(315,65,95); platform(485,115,100); platform(105,305,105);
     platform(230,365,115); platform(510,315,130); platform(650,400,95);
