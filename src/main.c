@@ -1,233 +1,233 @@
-/*
- * RANDOM ALPHA - MAPA APENAS PRETO E BRANCO (PSP / PSPSDK)
- * Versao de teste visual: seis regioes, cenarios e plataformas.
- * Controles: ESQUERDA/DIREITA troca a visualizacao de zona; START sai.
- * Sem personagem, inimigos, combate ou habilidades nesta etapa.
- */
+/* RANDOM ALPHA - mapa contínuo monocromático para PSP / PSPSDK */
 #include <pspkernel.h>
 #include <pspdisplay.h>
 #include <pspctrl.h>
 #include <pspgu.h>
+#include <string.h>
+#include <math.h>
 
-PSP_MODULE_INFO("RANDOM_MAPA", 0, 1, 0);
+PSP_MODULE_INFO("RANDOM_ALPHA_MAP", 0, 1, 0);
 PSP_MAIN_THREAD_ATTR(THREAD_ATTR_USER);
 
 #define SW 480
 #define SH 272
-#define WW 1600
-#define GROUND 250
+#define WORLD_W 7200.0f
+#define WORLD_H 1800.0f
+#define ZONE_W 1200.0f
 #define ZONES 6
-#define CAVE 0
-#define FOREST 1
-#define CITY 2
-#define CASTLE 3
-#define TOWER 4
-#define ARENA 5
 
 typedef unsigned int Color;
-typedef struct { Color color; float x, y, z; } Vertex;
+typedef struct { Color color; float x,y,z; } Vertex;
 static unsigned int __attribute__((aligned(16))) guList[262144];
-static int zone = CAVE;
-static unsigned int previousButtons = 0;
+static float camX=0.0f, camY=700.0f;
+static float playerX=120.0f, playerY=1080.0f;
+static float playerVY=0.0f;
+static int playerGrounded=0;
+static unsigned int oldButtons=0;
 
-#define BLACK  0xFF101018
-#define DARK   0xFF252535
-#define STONE  0xFF555568
-#define GRAY   0xFF858596
-#define LIGHT  0xFFBFC4D0
-#define WHITE  0xFFFFFFFF
-#define LIGHT  0xFFFFFFFF
-#define DLIGHT 0xFF777777
-#define LIGHT 0xFFBBBBBB
+/* Strict grayscale palette: black, white and gray only. */
+#define BLACK 0xFF000000
+#define DGRAY 0xFF292929
+#define MGRAY 0xFF666666
+#define LGRAY 0xFFB8B8B8
 #define WHITE 0xFFFFFFFF
-#define DARK  0xFF333333
 
-static int pressed(unsigned int now, unsigned int old, unsigned int button) {
-    return (now & button) && !(old & button);
+static int pressed(unsigned int now,unsigned int old,unsigned int b){return (now&b)&&!(old&b);}
+static Color shade(int n){ if(n<=0)return BLACK; if(n==1)return DGRAY; if(n==2)return MGRAY; if(n==3)return LGRAY; return WHITE; }
+static void rect(float x,float y,float w,float h,Color c){
+    x-=camX; y-=camY;
+    if(w<=0||h<=0||x>SW||y>SH||x+w<0||y+h<0)return;
+    Vertex *v=(Vertex*)sceGuGetMemory(2*sizeof(Vertex));
+    v[0]=(Vertex){c,x,y,0}; v[1]=(Vertex){c,x+w,y+h,0};
+    sceGuDrawArray(GU_SPRITES,GU_COLOR_8888|GU_VERTEX_32BITF|GU_TRANSFORM_2D,2,0,v);
 }
-
-static void rect(float x, float y, float w, float h, Color color) {
-    if (w <= 0 || h <= 0) return;
-    Vertex *v = (Vertex *)sceGuGetMemory(2 * sizeof(Vertex));
-    v[0] = (Vertex){color, x, y, 0};
-    v[1] = (Vertex){color, x + w, y + h, 0};
-    sceGuDrawArray(GU_SPRITES,
-        GU_COLOR_8888 | GU_VERTEX_32BITF | GU_TRANSFORM_2D,
-        2, 0, v);
+static void tri(float x1,float y1,float x2,float y2,float x3,float y3,Color c){
+    x1-=camX;x2-=camX;x3-=camX;y1-=camY;y2-=camY;y3-=camY;
+    Vertex *v=(Vertex*)sceGuGetMemory(3*sizeof(Vertex));
+    v[0]=(Vertex){c,x1,y1,0};v[1]=(Vertex){c,x2,y2,0};v[2]=(Vertex){c,x3,y3,0};
+    sceGuDrawArray(GU_TRIANGLES,GU_COLOR_8888|GU_VERTEX_32BITF|GU_TRANSFORM_2D,3,0,v);
 }
-
-static void tri(float x1,float y1,float x2,float y2,float x3,float y3,Color c) {
-    Vertex *v = (Vertex *)sceGuGetMemory(3 * sizeof(Vertex));
-    v[0] = (Vertex){c,x1,y1,0};
-    v[1] = (Vertex){c,x2,y2,0};
-    v[2] = (Vertex){c,x3,y3,0};
-    sceGuDrawArray(GU_TRIANGLES,
-        GU_COLOR_8888 | GU_VERTEX_32BITF | GU_TRANSFORM_2D,
-        3, 0, v);
+static void room(float x,float y,float w,float h,int style){
+    /* open room outline with a deliberate doorway */
+    rect(x,y,w,5,WHITE); rect(x,y+h-5,w,5,WHITE);
+    rect(x,y,5,h,WHITE); rect(x+w-5,y,5,h,WHITE);
+    rect(x+w*.35f,y+h-5,w*.18f,5,BLACK);
+    if(style&1){rect(x+18,y+18, w*.22f,4,LGRAY);}
+    if(style&2){rect(x+w*.62f,y+h*.45f,w*.18f,4,MGRAY);}
 }
-
-static void arch(float x,float y,float w,float h) {
-    rect(x,y,10,h,STONE); rect(x+w-10,y,10,h,STONE);
-    rect(x,y,w,8,GRAY);
-    tri(x-4,y+8,x+5,y-8,x+14,y+8,LIGHT);
-    tri(x+w-14,y+8,x+w-5,y-8,x+w+4,y+8,LIGHT);
+static void corridorH(float x,float y,float w){rect(x,y,w,5,WHITE);rect(x,y+34,w,5,WHITE);}
+static void corridorV(float x,float y,float h){rect(x,y,5,h,WHITE);rect(x+34,y,5,h,WHITE);}
+static void caveZone(float ox){
+    /* tightly branching underground maze */
+    corridorH(ox+20,1180,1120); corridorH(ox+80,1360,970); corridorH(ox+160,930,920);
+    corridorV(ox+100,980,390); corridorV(ox+280,1180,260); corridorV(ox+470,950,410);
+    corridorV(ox+690,1130,260); corridorV(ox+880,950,410); corridorV(ox+1040,1180,240);
+    room(ox+60,1010,140,100,1); room(ox+320,1210,130,120,2); room(ox+520,980,150,120,3);
+    room(ox+740,1210,120,100,1); room(ox+930,1000,150,110,2);
+    corridorH(ox+200,1040,240); corridorH(ox+470,1260,230); corridorH(ox+690,1030,220);
+    /* secret pocket */ room(ox+470,820,110,80,3); corridorV(ox+505,900,50);
+    /* cave roof and hanging stone teeth */
+    for(int i=0;i<8;i++)tri(ox+35+i*145,880,ox+55+i*145,930,ox+75+i*145,880,LGRAY);
 }
-
-static void crystal(float x,float y,float s) {
-    tri(x,y+s,x+s*.5f,y,x+s,y+s,LIGHT);
-    tri(x+s*.5f,y,x+s,y+s,x+s*.5f,y+s*1.35f,WHITE);
-    tri(x,y+s,x+s*.5f,y+s*1.35f,x+s*.5f,y,GRAY);
-}
-
-static void gate(float x,float y,float w,float h) {
-    rect(x,y,8,h,DARK); rect(x+w-8,y,8,h,DARK); rect(x,y,w,8,GRAY);
-    for (int i=0;i<6;i++) rect(x+14+i*((w-28)/6.0f),y+12,3,h-14,STONE);
-}
-
-static void rubble(float x,float y,float s) {
-    tri(x,y+s,x+s*.4f,y,x+s,y+s,DARK);
-    rect(x+s*.25f,y+s*.65f,s*.6f,s*.2f,GRAY);
-}
-
-static void drawCave(void) {
-    rect(0,0,SW,SH,BLACK); rect(0,0,SW,GROUND,DARK);
-    rect(0,GROUND,SW,22,STONE); rect(0,GROUND+22,SW,SH-GROUND-22,GRAY);
-    rect(0,0,SW,24,STONE);
-    for(int x=25;x<SW;x+=65){
-        tri(x,0,x+8,18+(x%5)*3,x+17,0,GRAY);
-        rect(x+20,45,5,45+(x%4)*8,DARK);
+static void forestZone(float ox){
+    /* open sky above ground, roots and burrows below */
+    rect(ox,700,ZONE_W,5,WHITE); rect(ox,1120,ZONE_W,5,WHITE);
+    for(int i=0;i<7;i++){
+        float x=ox+60+i*165; rect(x,520,9,180,WHITE);
+        tri(x-45,565,x+5,440,x+55,565,LGRAY); tri(x-32,520,x+5,420,x+42,520,MGRAY);
+        rect(x-20,700,48,5,WHITE); rect(x-5,705,5,90,LGRAY);
     }
-    rect(50,190,100,10,STONE); rect(190,160,110,10,STONE);
-    rect(330,190,100,10,STONE); rect(345,135,70,10,GRAY);
-    rect(65,210,12,40,STONE); rect(125,145,12,105,STONE);
-    rect(137,145,72,8,GRAY); rect(205,145,12,48,STONE);
-    rect(225,205,12,45,STONE); rect(270,120,12,130,STONE);
-    rect(282,120,55,8,GRAY); rect(330,160,12,90,STONE);
-    rect(360,150,80,8,GRAY); rect(420,95,12,60,STONE);
-    rect(130,55,100,8,LIGHT); rect(130,55,8,45,LIGHT); rect(222,55,8,45,LIGHT);
-    crystal(300,GROUND-53,20); crystal(370,GROUND-55,18);
-    gate(400,GROUND-110,70,110);
-    rect(280,100,45,40,LIGHT); rect(291,92,24,50,WHITE);
+    room(ox+70,780,170,100,1); room(ox+350,900,180,100,2); room(ox+760,780,180,100,3);
+    corridorH(ox+150,1010,380); corridorV(ox+480,1000,115); corridorH(ox+480,1080,420);
+    room(ox+900,970,180,100,2); corridorV(ox+1000,880,100);
+    /* high sky platforms */ rect(ox+130,340,210,5,WHITE);rect(ox+420,270,130,5,LGRAY);
+    rect(ox+690,390,180,5,WHITE); corridorV(ox+285,340,180); corridorV(ox+755,390,180);
 }
-
-static void drawForest(void) {
-    rect(0,0,SW,SH,0xFF101010); rect(0,GROUND,SW,22,DLIGHT);
-    rect(0,GROUND+22,SW,SH-GROUND-22,DARK);
-    for(int x=20;x<SW;x+=62){
-        rect(x+20,GROUND-80-(x%3)*8,10,80+(x%3)*8,DARK);
-        tri(x-2,GROUND-70-(x%3)*8,x+25,GROUND-140-(x%4)*5,x+54,GROUND-70-(x%3)*8,DLIGHT);
-        tri(x+4,GROUND-95,x+25,GROUND-155,x+46,GROUND-95,LIGHT);
+static void cityZone(float ox){
+    rect(ox,720,ZONE_W,5,WHITE); rect(ox,1120,ZONE_W,5,WHITE);
+    for(int i=0;i<6;i++){
+        float x=ox+35+i*190; float h=120+(i%3)*45;
+        rect(x,720-h,130,h,WHITE); rect(x+12,735-h,24,24,LGRAY);rect(x+55,735-h,24,24,LGRAY);rect(x+92,735-h,24,24,LGRAY);
+        rect(x+18,700,94,5,MGRAY);
     }
-    rect(55,190,90,10,DARK); rect(190,160,90,10,DARK);
-    rect(320,190,100,10,DARK); rect(380,150,65,10,DARK);
-    crystal(405,65,20); rect(40,185,22,65,WHITE);
+    corridorH(ox+30,850,1120); corridorH(ox+100,1000,950);
+    corridorV(ox+180,850,150); corridorV(ox+410,850,150); corridorV(ox+680,850,150); corridorV(ox+930,850,150);
+    room(ox+80,1160,180,120,1); room(ox+430,1190,160,100,2); room(ox+800,1150,190,130,3);
+    corridorH(ox+240,1240,230); corridorH(ox+590,1260,230); corridorV(ox+710,1120,145);
 }
-
-static void drawCity(void) {
-    rect(0,0,SW,SH,0xFF181818); rect(0,GROUND,SW,22,STONE);
-    rect(0,GROUND+22,SW,SH-GROUND-22,DARK);
-    for(int x=15;x<SW;x+=58){
-        int h=85+(x%5)*18; rect(x,GROUND-h,43,h,GRAY);
-        rect(x+7,GROUND-h+14,8,12,WHITE); rect(x+27,GROUND-h+14,8,12,WHITE);
-        rect(x+7,GROUND-h+38,8,12,WHITE); rect(x+27,GROUND-h+38,8,12,WHITE);
+static void castleZone(float ox){
+    /* broken castle with upper battlements and deep dungeon */
+    rect(ox+30,720,1120,5,WHITE); rect(ox+100,420,950,5,WHITE);
+    for(int i=0;i<8;i++){rect(ox+70+i*145,390,45,30,WHITE);}
+    room(ox+80,470,190,180,3); room(ox+350,500,220,150,1); room(ox+700,460,190,190,2); room(ox+960,510,150,140,1);
+    corridorH(ox+260,570,110); corridorH(ox+560,590,150); corridorH(ox+890,560,80);
+    corridorV(ox+165,650,170); corridorV(ox+445,650,210); corridorV(ox+785,650,170); corridorV(ox+1020,650,190);
+    corridorH(ox+100,800,1000); corridorH(ox+180,970,870); corridorV(ox+280,800,175); corridorV(ox+620,800,175); corridorV(ox+900,800,175);
+    room(ox+140,1180,190,120,1); room(ox+480,1210,220,100,2); room(ox+850,1170,200,140,3);
+    corridorH(ox+330,1260,150); corridorH(ox+700,1250,150);
+}
+static void towerZone(float ox){
+    /* vertical climb from underground foundations into sky */
+    rect(ox+560,180,5,1450,WHITE);rect(ox+600,180,5,1450,WHITE);
+    for(int i=0;i<10;i++){
+        float y=1500-i*135; float x=(i%2)?ox+280:ox+610;
+        rect(x,y,330,5,WHITE); rect(x+(i%2?0:300),y-70,5,75,LGRAY);
+        room(x+(i%2?20:40),y-115,180,70,(i%3));
     }
-    for(int x=20;x<SW;x+=95) rubble(x,GROUND-35,28+(x%3)*5);
-    rect(70,190,90,10,STONE); rect(220,155,100,10,STONE); rect(365,185,80,10,STONE);
+    rect(ox+200,240,220,5,WHITE);rect(ox+760,300,250,5,WHITE);rect(ox+110,400,160,5,LGRAY);
+    corridorV(ox+250,400,220); corridorV(ox+920,300,270);
+    /* foundations beneath the tower */
+    room(ox+70,1330,200,130,2);room(ox+850,1350,220,120,1);
+    corridorH(ox+260,1410,590);corridorV(ox+550,1320,95);
 }
-
-static void drawCastle(void) {
-    rect(0,0,SW,SH,0xFF202020); rect(0,GROUND,SW,22,STONE);
-    rect(0,GROUND+22,SW,SH-GROUND-22,DARK);
-    for(int x=20;x<SW;x+=78){
-        arch(x,105,52,GROUND-105);
-        rect(x-5,95,62,8,GRAY);
+static void arenaZone(float ox){
+    /* isolated final area suspended above the void */
+    rect(ox+100,680,1000,5,WHITE);rect(ox+170,900,860,5,WHITE);
+    room(ox+300,470,600,200,3); room(ox+420,950,360,160,1);
+    corridorV(ox+220,680,220); corridorV(ox+980,680,220);
+    corridorH(ox+220,850,760); corridorV(ox+580,900,50);
+    for(int i=0;i<9;i++)tri(ox+130+i*120,685,ox+150+i*120,730,ox+170+i*120,685,LGRAY);
+    rect(ox+510,390,180,5,WHITE);rect(ox+550,350,100,5,LGRAY);
+}
+/* Human made from simple geometric shapes. Coordinates are world-space. */
+static void circle(float cx, float cy, float r, Color c)
+{
+    int i;
+    for (i = 0; i < 12; i++) {
+        float a1 = (float)i * 6.2831853f / 12.0f;
+        float a2 = (float)(i + 1) * 6.2831853f / 12.0f;
+        tri(cx, cy,
+            cx + r * (float)cosf(a1), cy + r * (float)sinf(a1),
+            cx + r * (float)cosf(a2), cy + r * (float)sinf(a2), c);
     }
-    rect(45,190,75,10,GRAY); rect(165,155,75,10,GRAY);
-    rect(280,180,85,10,GRAY); rect(380,135,70,10,GRAY);
-    gate(390,GROUND-105,65,105);
+}
+static void drawPlayer(void)
+{
+    float x = playerX, y = playerY;
+    /* Head, neck, torso, arms and legs: monochrome geometric silhouette. */
+    circle(x, y - 43, 9, WHITE);
+    rect(x - 4, y - 34, 8, 6, LGRAY);
+    rect(x - 10, y - 29, 20, 23, WHITE);
+    tri(x - 10, y - 28, x - 17, y - 10, x - 9, y - 12, LGRAY);
+    tri(x + 10, y - 28, x + 17, y - 10, x + 9, y - 12, LGRAY);
+    rect(x - 9, y - 7, 7, 18, WHITE);
+    rect(x + 2, y - 7, 7, 18, WHITE);
+    /* small dark face mark keeps the head readable in grayscale */
+    rect(x + 2, y - 45, 3, 3, DGRAY);
 }
 
-static void drawTower(void) {
-    rect(0,0,SW,SH,0xFF080808); rect(0,GROUND,SW,22,STONE);
-    rect(0,GROUND+22,SW,SH-GROUND-22,DARK);
-    rect(0,0,22,SH,DARK); rect(SW-22,0,22,SH,DARK);
-    for(int y=40;y<220;y+=48){
-        rect(65+(y%3)*45,y,110,7,LIGHT);
-        tri(190,y+7,202,y-12,214,y+7,LIGHT);
+static void drawZoneLabel(int z){
+    /* visual zone indicator: six monochrome markers, active marker is white */
+    for(int i=0;i<ZONES;i++){
+        rect(12+i*20,10,14,7,(i==z)?WHITE:MGRAY);
+        rect(12+i*20,20,14,2,(i==z)?WHITE:DGRAY);
     }
-    for(int x=40;x<SW;x+=95){rect(x,35,7,215,GRAY);rect(x+35,35,7,215,GRAY);}
-    rect(75,195,80,10,STONE); rect(205,165,80,10,STONE);
-    rect(320,125,85,10,STONE); crystal(400,45,24); gate(390,GROUND-105,65,105);
+    /* upper status line */ rect(8,5,132,2,WHITE);
 }
-
-static void drawArena(void) {
-    rect(0,0,SW,SH,0xFF000000); rect(0,GROUND,SW,22,LIGHT);
-    rect(0,GROUND+22,SW,SH-GROUND-22,DARK);
-    for(int x=20;x<SW;x+=55){tri(x,GROUND,x+22,GROUND-70-(x%4)*8,x+50,GROUND,DARK);rect(x+20,GROUND-8,4,8,WHITE);}
-    rect(100,140,280,110,DARK); rect(112,150,256,5,STONE);
-    for(int x=120;x<370;x+=48){rect(x,85,12,60,GRAY);rect(x-5,78,22,7,LIGHT);}
-    tri(200,95,240,35,280,95,WHITE); gate(90,GROUND-105,60,105); gate(330,GROUND-105,60,105);
-}
-
-static void drawZone(void) {
-    switch(zone){
-        case CAVE: drawCave(); break;
-        case FOREST: drawForest(); break;
-        case CITY: drawCity(); break;
-        case CASTLE: drawCastle(); break;
-        case TOWER: drawTower(); break;
-        default: drawArena(); break;
+static int currentZone(void){int z=(int)(camX/ZONE_W);if(z<0)z=0;if(z>=ZONES)z=ZONES-1;return z;}
+static void drawWorld(void){
+    sceGuStart(GU_DIRECT,guList); sceGuClearColor(BLACK); sceGuClear(GU_COLOR_BUFFER_BIT|GU_DEPTH_BUFFER_BIT);
+    sceGuDisable(GU_DEPTH_TEST); sceGuDisable(GU_TEXTURE_2D);
+    /* World-space boundaries make each region part of one connected world. */
+    rect(0,0,WORLD_W,WORLD_H,BLACK);
+    caveZone(0);forestZone(ZONE_W);cityZone(ZONE_W*2);castleZone(ZONE_W*3);towerZone(ZONE_W*4);arenaZone(ZONE_W*5);
+    /* zone joins: open passage bridges between the six areas */
+    for(int i=1;i<ZONES;i++){
+        float x=i*ZONE_W;
+        corridorH(x-35,1060,70); corridorV(x-18,1020,45);
+        corridorH(x-35,720,70);
     }
-    /* Indicador visual da regiao atual, sem texto nem personagem. */
-    for(int i=0;i<ZONES;i++) rect(174+i*23,8,17,6,(i==zone)?WHITE:STONE);
-    rect(8,8,100,5,DARK); rect(8,18,464,2,GRAY);
+    drawPlayer();
+    drawZoneLabel(currentZone());
+    sceGuFinish();sceGuSync(0,0);sceDisplayWaitVblankStart();sceGuSwapBuffers();
 }
-
-static void drawFrame(void) {
-    sceGuStart(GU_DIRECT, guList);
-    sceGuClearColor(BLACK);
-    sceGuClear(GU_COLOR_BUFFER_BIT | GU_DEPTH_BUFFER_BIT);
-    sceGuDisable(GU_DEPTH_TEST);
-    sceGuDisable(GU_TEXTURE_2D);
-    drawZone();
-    sceGuFinish();
-    sceGuSync(0,0);
-    sceDisplayWaitVblankStart();
-    sceGuSwapBuffers();
-}
-
-int main(void) {
-    sceCtrlSetSamplingCycle(0);
-    sceCtrlSetSamplingMode(PSP_CTRL_MODE_ANALOG);
-    sceGuInit();
-    sceGuStart(GU_DIRECT, guList);
-    sceGuDrawBuffer(GU_PSM_8888, (void*)0, 512);
-    /* Offsets convencionais de framebuffer para PSP. */
-    sceGuDispBuffer(SW, SH, (void*)0x88000, 512);
-    sceGuDepthBuffer((void*)0x110000, 512);
-    sceGuOffset(2048-SW/2, 2048-SH/2);
-    sceGuViewport(2048,2048,SW,SH);
-    sceGuDepthRange(65535,0);
-    sceGuScissor(0,0,SW,SH);
-    sceGuEnable(GU_SCISSOR_TEST);
-    sceGuDisable(GU_DEPTH_TEST);
-    sceGuFinish();
-    sceGuSync(0,0);
-    sceDisplayWaitVblankStart();
-    sceGuDisplay(GU_TRUE);
-
+int main(void){
+    sceCtrlSetSamplingCycle(0);sceCtrlSetSamplingMode(PSP_CTRL_MODE_ANALOG);
+    sceGuInit();sceGuStart(GU_DIRECT,guList);
+    sceGuDrawBuffer(GU_PSM_8888,(void*)0,512);
+    sceGuDispBuffer(SW,SH,(void*)0x88000,512);sceGuDepthBuffer((void*)0x110000,512);
+    sceGuOffset(2048-SW/2,2048-SH/2);sceGuViewport(2048,2048,SW,SH);sceGuDepthRange(65535,0);
+    sceGuScissor(0,0,SW,SH);sceGuEnable(GU_SCISSOR_TEST);sceGuDisable(GU_DEPTH_TEST);
+    sceGuFinish();sceGuSync(0,0);sceDisplayWaitVblankStart();sceGuDisplay(GU_TRUE);
     SceCtrlData pad;
-    while(1) {
+    while(1){
         sceCtrlReadBufferPositive(&pad,1);
-        if(pressed(pad.Buttons,previousButtons,PSP_CTRL_LEFT)) zone=(zone+ZONES-1)%ZONES;
-        if(pressed(pad.Buttons,previousButtons,PSP_CTRL_RIGHT)) zone=(zone+1)%ZONES;
-        if(pressed(pad.Buttons,previousButtons,PSP_CTRL_START)) break;
-        drawFrame();
-        previousButtons=pad.Buttons;
+        /* Character movement: D-pad left/right; X jumps. */
+        if (pad.Buttons & PSP_CTRL_LEFT)  playerX -= 2.5f;
+        if (pad.Buttons & PSP_CTRL_RIGHT) playerX += 2.5f;
+        if (pressed(pad.Buttons, oldButtons, PSP_CTRL_CROSS) && playerGrounded) {
+            playerVY = -8.0f;
+            playerGrounded = 0;
+        }
+
+        /* Basic gravity and a simple ground plane for this map prototype. */
+        playerVY += 0.28f;
+        if (playerVY > 6.0f) playerVY = 6.0f;
+        playerY += playerVY;
+        if (playerY > 1080.0f) {
+            playerY = 1080.0f;
+            playerVY = 0.0f;
+            playerGrounded = 1;
+        }
+
+        if (pressed(pad.Buttons, oldButtons, PSP_CTRL_LTRIGGER)) playerX -= 100.0f;
+        if (pressed(pad.Buttons, oldButtons, PSP_CTRL_RTRIGGER)) playerX += 100.0f;
+        if (pressed(pad.Buttons, oldButtons, PSP_CTRL_START)) break;
+
+        if (playerX < 20.0f) playerX = 20.0f;
+        if (playerX > WORLD_W - 20.0f) playerX = WORLD_W - 20.0f;
+
+        /* Camera follows the player, keeping them near screen center. */
+        camX = playerX - (SW * 0.5f);
+        camY = playerY - (SH * 0.68f);
+        if (camX < 0) camX = 0;
+        if (camX > WORLD_W - SW) camX = WORLD_W - SW;
+        if (camY < 0) camY = 0;
+        if (camY > WORLD_H - SH) camY = WORLD_H - SH;
+
+        drawWorld();
+        oldButtons = pad.Buttons;
         sceKernelDelayThread(16667);
     }
-    sceGuDisplay(GU_FALSE);
-    sceGuTerm();
-    sceKernelExitGame();
-    return 0;
+    sceGuDisplay(GU_FALSE);sceGuTerm();sceKernelExitGame();return 0;
 }
