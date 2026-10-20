@@ -19,24 +19,16 @@ jobs:
         run: |
           test -f Makefile
           test -f src/main.c
-          test -d assets/sprites
-          echo "Codigo e sprites encontrados."
+          test -f assets/sprites/idle_1.png
 
-      - name: Compilar RANDOM
+      - name: Compilar jogo
         run: |
           make clean
           make
-
-      - name: Verificar EBOOT
-        run: |
-          if [ ! -f EBOOT.PBP ]; then
-            echo "ERRO: EBOOT.PBP nao foi gerado."
-            find . -maxdepth 3 -type f
-            exit 1
-          fi
+          test -f EBOOT.PBP
           ls -lh EBOOT.PBP
 
-      - name: Disponibilizar EBOOT.PBP
+      - name: Publicar EBOOT
         uses: actions/upload-artifact@v4
         with:
           name: RANDOM-Beta-0.1
