@@ -379,8 +379,16 @@ static void drawTexture(
     float height,
     int flip)
 {
-    if (!texture || !texture->pixels)
-        return;
+    if (!texture || !texture->pixels) {
+    drawRect(
+        playerX,
+        playerY,
+        PLAYER_W,
+        PLAYER_H,
+        0xFF00FFFF
+    );
+    return;
+    }
 
     sceGuEnable(GU_TEXTURE_2D);
 
