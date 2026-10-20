@@ -69,24 +69,41 @@ static int targetFlash = 0;
 static void rect(float x, float y, float w, float h,
                  unsigned int color)
 {
-    Vertex v[2] = {
-        {color, x,     y,     0},
-        {color, x + w, y + h, 0}
-    };
+    Vertex *v = (Vertex *)sceGuGetMemory(
+        sizeof(Vertex) * 2
+    );
+
+    if (!v) return;
+
+    v[0] = (Vertex){color, x,     y,     0};
+    v[1] = (Vertex){color, x + w, y + h, 0};
 
     sceGuDrawArray(
         GU_SPRITES,
-        GU_COLOR_8888 | GU_VERTEX_32BITF | GU_TRANSFORM_2D,
-        2, 0, v
+        GU_COLOR_8888 |
+        GU_VERTEX_32BITF |
+        GU_TRANSFORM_2D,
+        2, NULL, v
     );
 }
-
 static void poly(Vertex *v, int n)
 {
+    if (!v || n < 3) return;
+
+    Vertex *gpuVertices = (Vertex *)sceGuGetMemory(
+        sizeof(Vertex) * n
+    );
+
+    if (!gpuVertices) return;
+
+    memcpy(gpuVertices, v, sizeof(Vertex) * n);
+
     sceGuDrawArray(
         GU_TRIANGLE_FAN,
-        GU_COLOR_8888 | GU_VERTEX_32BITF | GU_TRANSFORM_2D,
-        n, 0, v
+        GU_COLOR_8888 |
+        GU_VERTEX_32BITF |
+        GU_TRANSFORM_2D,
+        n, NULL, gpuVertices
     );
 }
 
@@ -492,22 +509,27 @@ static void initGU(void)
 
     sceGuStart(GU_DIRECT, list);
 
-    sceGuDrawBuffer(GU_PSM_8888, (void*)0, W);
-    sceGuDispBuffer(W, H, (void*)0x88000, W);
-    sceGuDepthBuffer((void*)0x110000, W);
+    sceGuDrawBuffer(GU_PSM_8888, (void *)0, 512);
+    sceGuDispBuffer(W, H, (void *)0x88000, 512);
+    sceGuDepthBuffer((void *)0x110000, 512);
 
     sceGuOffset(2048 - W / 2, 2048 - H / 2);
     sceGuViewport(2048, 2048, W, H);
-    sceGuDepthRange(0xC350, 0x2710);
+    sceGuDepthRange(65535, 0);
 
     sceGuScissor(0, 0, W, H);
     sceGuEnable(GU_SCISSOR_TEST);
     sceGuDisable(GU_DEPTH_TEST);
     sceGuDisable(GU_TEXTURE_2D);
-    sceGuShadeModel(GU_SMOOTH);
+    sceGuDisable(GU_CULL_FACE);
+    sceGuShadeModel(GU_FLAT);
 
     sceGuClearColor(0xFFF0F0E8);
-    sceGuClear(GU_COLOR_BUFFER_BIT | GU_DEPTH_BUFFER_BIT);
+    sceGuClearDepth(65535);
+    sceGuClear(
+        GU_COLOR_BUFFER_BIT |
+        GU_DEPTH_BUFFER_BIT
+    );
 
     sceGuFinish();
     sceGuSync(0, 0);
@@ -515,7 +537,6 @@ static void initGU(void)
     sceDisplayWaitVblankStart();
     sceGuDisplay(GU_TRUE);
 }
-
 int main(void)
 {
     memset(&player, 0, sizeof(player));
