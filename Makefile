@@ -1,6 +1,6 @@
 
 TARGET = RANDOM
-OBJS = main.o
+OBJS = src/main.o
 
 CFLAGS = -O2 -G0 -Wall
 ASFLAGS = $(CFLAGS)
