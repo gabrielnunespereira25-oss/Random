@@ -15,12 +15,31 @@ jobs:
       - name: Baixar codigo
         uses: actions/checkout@v4
 
+      - name: Localizar arquivos
+        run: |
+          echo "Arquivos do repositorio:"
+          find . -type f \( -name "Makefile" -o -name "main.c" \)
+
       - name: Compilar RANDOM
-        run: make clean && make
+        run: |
+          if [ -f main.c ] && [ -f Makefile ]; then
+            make clean
+            make
+          elif [ -f RANDOM/main.c ] && [ -f RANDOM/Makefile ]; then
+            cd RANDOM
+            make clean
+            make
+          else
+            echo "ERRO: main.c e Makefile nao foram encontrados juntos."
+            echo "Verifique a estrutura do repositorio."
+            exit 1
+          fi
 
       - name: Disponibilizar EBOOT.PBP
         uses: actions/upload-artifact@v4
         with:
           name: RANDOM-Beta-0.1
-          path: EBOOT.PBP
+          path: |
+            EBOOT.PBP
+            RANDOM/EBOOT.PBP
           if-no-files-found: error
