@@ -15,42 +15,31 @@ jobs:
       - name: Baixar codigo
         uses: actions/checkout@v4
 
-      - name: Localizar projeto
-        shell: bash
+      - name: Verificar arquivos
         run: |
-          echo "=== Estrutura do repositorio ==="
-          find . -maxdepth 5 -type f | sort | head -300
+          test -f Makefile
+          test -f src/main.c
+          test -d assets/sprites
+          echo "Codigo e sprites encontrados."
 
-          MAIN="$(find . -type f -name main.c \
-            -not -path './.git/*' | head -1)"
-
-          if [ -z "$MAIN" ]; then
-            echo "::error::main.c nao existe no repositorio."
-            exit 1
-          fi
-
-          PROJECT_DIR="$(dirname "$MAIN")"
-          echo "Projeto encontrado em: $PROJECT_DIR"
-          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
-
-          if [ ! -f "$PROJECT_DIR/Makefile" ] &&
-             [ ! -f "$PROJECT_DIR/makefile" ]; then
-            echo "::error::Makefile nao encontrado junto de main.c."
-            exit 1
-          fi
-
-      - name: Compilar jogo PSP
-        shell: bash
+      - name: Compilar RANDOM
         run: |
-          cd "$PROJECT_DIR"
           make clean
           make
-          test -f EBOOT.PBP
+
+      - name: Verificar EBOOT
+        run: |
+          if [ ! -f EBOOT.PBP ]; then
+            echo "ERRO: EBOOT.PBP nao foi gerado."
+            find . -maxdepth 3 -type f
+            exit 1
+          fi
+          ls -lh EBOOT.PBP
 
       - name: Disponibilizar EBOOT.PBP
         uses: actions/upload-artifact@v4
         with:
           name: RANDOM-Beta-0.1
-          path: ${{ env.PROJECT_DIR }}/EBOOT.PBP
+          path: EBOOT.PBP
           if-no-files-found: error
           retention-days: 30
