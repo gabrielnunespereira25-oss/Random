@@ -15,5 +15,5 @@ PSP_FW_VERSION = 500
 EXTRA_TARGETS = EBOOT.PBP
 PSP_EBOOT_TITLE = RANDOM
 
-PSPSDK=$(shell psp-config --pspsdk-path)
+PSPSDK = $(shell psp-config --pspsdk-path)
 include $(PSPSDK)/lib/build.mak
