@@ -1,17 +1,16 @@
+
 TARGET = RANDOM
-OBJS = src/main.o
+OBJS = main.o
 
 INCDIR =
-CFLAGS = -O2 -G0 -Wall -Wextra
-CXXFLAGS = $(CFLAGS)
+CFLAGS = -O2 -G0 -Wall
+CXXFLAGS = $(CFLAGS) -fno-exceptions -fno-rtti
 ASFLAGS = $(CFLAGS)
 
-LIBDIR =
-LDFLAGS =
-LIBS = -lpspgu -lpspgum -lpspdisplay -lpspge -lpspctrl -lpspkernel -lpng -lz
+LIBS = -lpng -lz -lm
 
-BUILD_PRX = 1
-PSP_FW_VERSION = 660
+BUILD_PRX = 0
+PSP_FW_VERSION = 500
 
 EXTRA_TARGETS = EBOOT.PBP
 PSP_EBOOT_TITLE = RANDOM
