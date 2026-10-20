@@ -1,4 +1,3 @@
-
 /*
  * RANDOM - PSP / PSPSDK
  * Player com 16 sprites PNG.
