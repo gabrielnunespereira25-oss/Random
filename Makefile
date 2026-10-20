@@ -4,7 +4,8 @@ OBJS = src/main.o
 
 CFLAGS = -O2 -G0 -Wall
 ASFLAGS = $(CFLAGS)
-LIBS = -lpng -lz -lm
+
+LIBS = -lpng -lz -lm -lpspgu -lpspgum
 
 BUILD_PRX = 0
 EXTRA_TARGETS = EBOOT.PBP
