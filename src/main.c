@@ -332,8 +332,8 @@ static void drawTexture(
 {
     /* Usa as coordenadas recebidas se o PNG nao carregar. */
     if (!texture || !texture->pixels) {
-        drawRect(x, y, width, height, 0xFF00FFFF);
-        return;
+    drawRect(x, y, width, height, 0xFF00FFFF);
+    return;
     }
 
     sceGuEnable(GU_TEXTURE_2D);
