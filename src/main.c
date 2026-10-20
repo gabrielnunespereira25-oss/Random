@@ -1,10 +1,11 @@
 
 /*
  * RANDOM - ESSENCIA ESCURA
- * BETA 0.1 | PSP / PSPSDK
+ * BETA 0.2 | PSP / PSPSDK
  *
  * ZONA 1: CAVERNAS DA ESSENCIA
- * ZONA 2: FORTALEZA DO GOLEM
+ * ZONA 2: FLORESTA ESQUECIDA (ARANHA DE GRAMA)
+ * ZONA 3: FORTALEZA DO GOLEM
  *
  * ANALOGICO / DIRECIONAL: MOVER
  * X: PULAR
@@ -31,6 +32,8 @@ PSP_MAIN_THREAD_ATTR(THREAD_ATTR_USER);
 #define PI 3.14159265f
 #define FLOOR_Y 224.0f
 #define ZONE_W 2400.0f
+#define FOREST_START 2400.0f
+#define BOSS_START 4250.0f
 #define WORLD_W 4800.0f
 
 #define BLACK  0xFF08080C
@@ -38,10 +41,12 @@ PSP_MAIN_THREAD_ATTR(THREAD_ATTR_USER);
 #define GRAY   0xFF777783
 #define WHITE  0xFFF4F4FF
 #define PURPLE 0xFF713B91
-#define RED    0xFF3535D5
+#define GREEN  0xFF4C8B45
+#define LGREEN 0xFF91C95A
 
 #define WALL_MAX 100
 #define ZOMBIE_MAX 10
+#define SPIDER_MAX 6
 #define MAGIC_MAX 10
 
 typedef struct {
@@ -71,10 +76,17 @@ typedef struct {
     float timer, hurt;
 } Golem;
 
+typedef struct {
+    float x, y, vx, vy, anim, hp, hurt;
+    int facing, grounded, alive, state;
+    float jumpCooldown;
+} GrassSpider;
+
 static unsigned int __attribute__((aligned(16))) list[262144];
 
 static Actor player;
 static Actor zombies[ZOMBIE_MAX];
+static GrassSpider spiders[SPIDER_MAX];
 static Magic shots[MAGIC_MAX];
 static Golem boss;
 static Wall walls[WALL_MAX];
@@ -83,49 +95,39 @@ static int wallCount = 0;
 static int running = 1;
 static int gameOver = 0;
 static int victory = 0;
+static int swordHitDone = 0;
 
 static float cameraX = 0.0f;
 static float worldTime = 0.0f;
 static float magicCooldown = 0.0f;
-static float bossSpawnX = 4250.0f;
+static float bossSpawnX = BOSS_START;
 
-/* -------------------------------------------------- */
-/* DESENHO                                             */
-/* -------------------------------------------------- */
+/* DESENHO */
 
-static void tri(float x1, float y1,
-                float x2, float y2,
-                float x3, float y3,
-                unsigned int color)
+static void tri(float x1, float y1, float x2, float y2,
+                float x3, float y3, unsigned int color)
 {
     Vertex *v = (Vertex *)sceGuGetMemory(sizeof(Vertex) * 3);
-
     v[0].color = color;
     v[0].x = x1; v[0].y = y1; v[0].z = 0;
-
     v[1].color = color;
     v[1].x = x2; v[1].y = y2; v[1].z = 0;
-
     v[2].color = color;
     v[2].x = x3; v[2].y = y3; v[2].z = 0;
 
-    sceGuDrawArray(
-        GU_TRIANGLES,
-        GU_COLOR_8888 | GU_VERTEX_32BITF |
-        GU_TRANSFORM_2D,
-        3, 0, v
-    );
+    sceGuDrawArray(GU_TRIANGLES,
+        GU_COLOR_8888 | GU_VERTEX_32BITF | GU_TRANSFORM_2D,
+        3, 0, v);
 }
 
 static void rect(float x, float y, float w, float h,
                  unsigned int color)
 {
-    tri(x,y,x+w,y,x,y+h,color);
-    tri(x+w,y,x+w,y+h,x,y+h,color);
+    tri(x, y, x+w, y, x, y+h, color);
+    tri(x+w, y, x+w, y+h, x, y+h, color);
 }
 
-static void circle(float x, float y, float r,
-                   unsigned int color)
+static void circle(float x, float y, float r, unsigned int color)
 {
     int i;
     const int n = 16;
@@ -134,15 +136,14 @@ static void circle(float x, float y, float r,
         float a = 2.0f * PI * i / n;
         float b = 2.0f * PI * (i+1) / n;
 
-        tri(x,y,
+        tri(x, y,
             x + cosf(a)*r, y + sinf(a)*r,
             x + cosf(b)*r, y + sinf(b)*r,
             color);
     }
 }
 
-static void line(float x1, float y1,
-                 float x2, float y2,
+static void line(float x1, float y1, float x2, float y2,
                  float width, unsigned int color)
 {
     float dx = x2-x1;
@@ -159,9 +160,8 @@ static void line(float x1, float y1,
     tri(x1-nx,y1-ny,x2-nx,y2-ny,x2+nx,y2+ny,color);
 }
 
-/* -------------------------------------------------- */
-/* MAPA E COLISOES                                     */
-/* -------------------------------------------------- */
+/* MAPA E COLISOES
+   Actor.y representa a linha dos pes. */
 
 static void addWall(float x, float y, float w, float h)
 {
@@ -174,84 +174,7 @@ static void addWall(float x, float y, float w, float h)
     wallCount++;
 }
 
-static void initWorld(void)
-{
-    int i;
-
-    wallCount = 0;
-
-    /* Zona 1: cavernas. Plataformas e pilares. */
-    addWall(180,176,150,16);
-    addWall(390,145,130,16);
-    addWall(620,180,170,16);
-    addWall(850,155,140,16);
-    addWall(1100,125,170,16);
-    addWall(1370,172,160,16);
-    addWall(1620,142,190,16);
-    addWall(1900,178,140,16);
-    addWall(2180,150,140,16);
-
-    addWall(550,178,24,46);
-    addWall(1020,170,24,54);
-    addWall(1760,174,24,50);
-
-    /* Zona 2: fortaleza. */
-    addWall(2500,174,180,16);
-    addWall(2780,145,150,16);
-    addWall(3060,120,180,16);
-    addWall(3350,164,180,16);
-    addWall(3640,132,180,16);
-    addWall(3930,174,150,16);
-    addWall(4180,145,160,16);
-    addWall(4490,170,160,16);
-
-    for (i=0; i<ZOMBIE_MAX; i++) {
-        zombies[i].x = 260.0f + i*360.0f;
-        zombies[i].y = FLOOR_Y-32;
-        zombies[i].vx = 0;
-        zombies[i].vy = 0;
-        zombies[i].hp = 50;
-        zombies[i].anim = 0;
-        zombies[i].facing = -1;
-        zombies[i].grounded = 1;
-        zombies[i].alive = 1;
-        zombies[i].crippled = 0;
-        zombies[i].hurt = 0;
-    }
-
-    memset(shots,0,sizeof(shots));
-
-    player.x = 90;
-    player.y = FLOOR_Y-40;
-    player.vx = player.vy = 0;
-    player.anim = player.attack = 0;
-    player.hp = 100;
-    player.facing = 1;
-    player.grounded = 1;
-    player.alive = 1;
-    player.crippled = 0;
-    player.hurt = 0;
-
-    boss.x = bossSpawnX;
-    boss.y = FLOOR_Y-54;
-    boss.vx = boss.vy = 0;
-    boss.anim = 0;
-    boss.hp = 500;
-    boss.facing = -1;
-    boss.grounded = 1;
-    boss.alive = 1;
-    boss.state = 0;
-    boss.timer = 2.0f;
-    boss.hurt = 0;
-
-    cameraX = 0;
-    worldTime = 0;
-    magicCooldown = 0;
-    gameOver = victory = 0;
-}
-
-static int overlaps(float x, float y, float w, float h,
-                    Wall *a)
+static int overlaps(float x, float y, float w, float h, Wall *a)
 {
     return x < a->x+a->w && x+w > a->x &&
            y < a->y+a->h && y+h > a->y;
@@ -260,188 +183,657 @@ static int overlaps(float x, float y, float w, float h,
 static void collideActor(Actor *a, float dt)
 {
     int i;
+    float oldY, nextY;
 
-    a->x += a->vx*dt;
+    a->x += a->vx * dt;
 
-    for (i=0; i<wallCount; i++) {
-        if (overlaps(a->x-8,a->y-38,16,40,&walls[i])) {
+    for (i = 0; i < wallCount; i++) {
+        Wall *w = &walls[i];
+
+        if (a->y + 2 <= w->y ||
+            a->y - 38 >= w->y + w->h)
+            continue;
+
+        if (a->x + 8 > w->x &&
+            a->x - 8 < w->x + w->w) {
             if (a->vx > 0)
-                a->x = walls[i].x-8;
+                a->x = w->x - 8;
             else if (a->vx < 0)
-                a->x = walls[i].x+walls[i].w+8;
+                a->x = w->x + w->w + 8;
         }
     }
 
-    a->y += a->vy*dt;
+    oldY = a->y;
+    nextY = oldY + a->vy * dt;
+    a->y = nextY;
     a->grounded = 0;
 
-    if (a->y >= FLOOR_Y-40) {
-        a->y = FLOOR_Y-40;
+    if (a->vy >= 0 && a->y + 2 >= FLOOR_Y) {
+        a->y = FLOOR_Y - 2;
         a->vy = 0;
         a->grounded = 1;
     }
 
-    for (i=0; i<wallCount; i++) {
-        if (overlaps(a->x-8,a->y-38,16,40,&walls[i])) {
-            if (a->vy > 0) {
-                a->y = walls[i].y;
-                a->vy = 0;
-                a->grounded = 1;
-            } else if (a->vy < 0) {
-                a->y = walls[i].y+walls[i].h+38;
-                a->vy = 0;
-            }
+    for (i = 0; i < wallCount; i++) {
+        Wall *w = &walls[i];
+
+        if (a->x + 8 <= w->x ||
+            a->x - 8 >= w->x + w->w)
+            continue;
+
+        if (a->vy >= 0 && oldY + 2 <= w->y &&
+            nextY + 2 >= w->y) {
+            a->y = w->y - 2;
+            a->vy = 0;
+            a->grounded = 1;
+        } else if (a->vy < 0 &&
+                   oldY - 38 >= w->y + w->h &&
+                   nextY - 38 <= w->y + w->h) {
+            a->y = w->y + w->h + 38;
+            a->vy = 0;
         }
     }
 
     if (a->x < 8) a->x = 8;
-    if (a->x > WORLD_W-8) a->x = WORLD_W-8;
+    if (a->x > WORLD_W - 8) a->x = WORLD_W - 8;
 }
+/* ============================
+   PARTE 2: PERSONAGENS E INIMIGOS
+   ============================ */
 
-/* -------------------------------------------------- */
-/* PERSONAGEM                                          */
-/* -------------------------------------------------- */
+/* JOGADOR: manter o desenho original.
+   Corpo triangular, cabelo de fogo em circulos
+   e uma perna ausente. */
 
 static void drawPlayer(void)
 {
-    float x = player.x-cameraX;
+    float x = player.x - cameraX;
     float y = player.y;
-    float walk = sinf(player.anim*10)*5;
-    float bob = player.grounded && fabsf(player.vx)>5
-              ? fabsf(sinf(player.anim*10))*2 : 0;
-    float flame;
+    float legX = x + (player.facing > 0 ? 3 : -3);
 
-    y += bob;
-
-    /* Sombra */
-    circle(x,y+1,11,BLACK);
-
-    /* Manto e corpo triangular */
-    tri(x-8,y-30,x+8,y-30,x-12,y-5,BLACK);
-    tri(x+8,y-30,x+7,y-13,x-12,y-5,GRAY);
-    tri(x-9,y-31,x+8,y-31,x,y-12,BLACK);
-    tri(x-3,y-27,x+3,y-22,x-1,y-18,WHITE);
-
-    /* Um braco de cada lado */
-    line(x-7,y-27,x-13,y-17+walk*.3f,5,BLACK);
-    line(x+7,y-27,x+12,y-18-walk*.3f,5,GRAY);
-
-    /* Uma unica perna: a outra esta ausente */
-    line(x+2,y-13,x+5+walk,y-2,6,BLACK);
-    line(x+4+walk,y-3,x+12+walk,y-2,4,GRAY);
+    /* Corpo triangular */
+    tri(x, y-32, x-10, y-9, x+10, y-9, PURPLE);
 
     /* Cabeca */
-    circle(x,y-38,8,BLACK);
-    rect(x+2,y-39,5,1.5f,WHITE);
+    circle(x, y-37, 6, 0xFF29202F);
 
-    /* Cabelo de circulos de fogo */
-    flame = sinf(worldTime*8)*2;
+    /* Cabelo de fogo */
+    circle(x-5, y-43, 4, 0xFFB83232);
+    circle(x,   y-46, 5, 0xFFFF682F);
+    circle(x+5, y-42, 4, 0xFFFFA52F);
+    circle(x+1, y-40, 3, 0xFFFFD45A);
 
-    circle(x-5+flame,y-46,4,WHITE);
-    circle(x,y-49-flame,5,WHITE);
-    circle(x+5-flame,y-45,4,WHITE);
-    circle(x-1,y-43,3,GRAY);
-    circle(x+8+flame,y-49,2,WHITE);
+    /* Um olho */
+    rect(x+(player.facing*2), y-38, 2, 2, WHITE);
 
-    /* Ataque: arco circular em meia-lua */
+    /* Uma unica perna */
+    line(x, y-10, legX, y-2, 3, 0xFF25252D);
+
+    /* Espada durante o ataque */
     if (player.attack > 0) {
-        int i;
-        float progress = 1-player.attack/0.48f;
-        float radius = 15+progress*22;
-        float start = -1.35f;
-        float end = 1.35f;
-        float prevX, prevY;
-
-        prevX = x + player.facing*cosf(start)*radius;
-        prevY = y-24 + sinf(start)*radius;
-
-        for (i=1; i<=12; i++) {
-            float angle = start+(end-start)*i/12.0f;
-            float nx = x+player.facing*cosf(angle)*radius;
-            float ny = y-24+sinf(angle)*radius;
-
-            line(prevX,prevY,nx,ny,3,WHITE);
-            prevX = nx;
-            prevY = ny;
-        }
+        float sx = x + player.facing*10;
+        float sy = y-22;
+        line(sx, sy, sx+player.facing*18, sy-7, 3, GRAY);
+        line(sx+player.facing*18, sy-7,
+             sx+player.facing*21, sy-8, 2, WHITE);
     }
 }
 
-/* -------------------------------------------------- */
-/* MAGIA                                               */
-/* -------------------------------------------------- */
+/* ZUMBIS */
 
-static void castMagic(void)
+static void drawZombie(Actor *z)
+{
+    float x = z->x-cameraX;
+    float y = z->y;
+
+    if (!z->alive) return;
+
+    rect(x-7, y-26, 14, 17, 0xFF426B43);
+    circle(x, y-31, 6, 0xFF71885A);
+
+    rect(x-4, y-33, 2, 2, WHITE);
+    rect(x+2, y-33, 2, 2, WHITE);
+
+    line(x-4, y-9, x-7, y-2, 3, 0xFF353D35);
+    line(x+4, y-9, x+5, y-2, 3, 0xFF353D35);
+
+    line(x-6, y-23, x-12, y-16, 3, 0xFF426B43);
+    line(x+6, y-23, x+12, y-16, 3, 0xFF426B43);
+
+    if (z->hurt > 0)
+        rect(x-8, y-36, 16, 2, WHITE);
+}
+
+/* ARANHA DE GRAMA */
+
+static void drawSpider(GrassSpider *s)
+{
+    float x = s->x-cameraX;
+    float y = s->y;
+    int i;
+    float wave;
+
+    if (!s->alive) return;
+
+    wave = sinf(s->anim*8.0f)*3.0f;
+
+    /* Oito patas animadas */
+    for (i = 0; i < 4; i++) {
+        float side = (i < 2) ? -1.0f : 1.0f;
+        float row = (i % 2 == 0) ? -1.0f : 1.0f;
+        float legY = y-9+(float)(i%2)*3;
+
+        line(x+side*4, legY,
+             x+side*(10+i*2), legY-5+wave*row,
+             2, 0xFF355B2D);
+
+        line(x+side*(10+i*2), legY-5+wave*row,
+             x+side*(13+i*2), legY+2+wave*row,
+             2, 0xFF4C8B45);
+    }
+
+    /* Corpo coberto de grama */
+    circle(x, y-11, 8, 0xFF315C2D);
+    circle(x-4, y-14, 4, GREEN);
+    circle(x+3, y-15, 5, 0xFF39753A);
+    circle(x, y-19, 3, LGREEN);
+
+    /* Olhos */
+    circle(x-3, y-12, 1.5f, WHITE);
+    circle(x+3, y-12, 1.5f, WHITE);
+
+    if (s->hurt > 0)
+        circle(x, y-13, 9, WHITE);
+}
+
+/* GOLEM */
+
+static void drawBoss(void)
+{
+    float x = boss.x-cameraX;
+    float y = boss.y;
+
+    if (!boss.alive) return;
+
+    /* Corpo rochoso */
+    rect(x-18, y-40, 36, 32, 0xFF655E68);
+    rect(x-13, y-47, 26, 10, 0xFF817985);
+
+    /* Brilho dos olhos */
+    rect(x-9, y-42, 5, 4, 0xFFFF4D4D);
+    rect(x+4, y-42, 5, 4, 0xFFFF4D4D);
+
+    /* Bracos */
+    line(x-16, y-34, x-25, y-17, 7, 0xFF514B55);
+    line(x+16, y-34, x+25, y-17, 7, 0xFF514B55);
+
+    /* Pernas */
+    rect(x-15, y-9, 11, 7, 0xFF45414A);
+    rect(x+4, y-9, 11, 7, 0xFF45414A);
+
+    /* Barra de vida */
+    rect(x-22, y-57, 44, 4, 0xFF442222);
+    if (boss.hp > 0) {
+        float hpWidth = 44.0f * boss.hp / 100.0f;
+        if (hpWidth < 0) hpWidth = 0;
+        if (hpWidth > 44) hpWidth = 44;
+        rect(x-22, y-57, hpWidth, 4, 0xFFE53E4E);
+    }
+}
+
+/* INICIALIZACAO DO MAPA */
+
+static void initWorld(void)
+{
+    int i;
+
+    wallCount = 0;
+
+    /* Plataformas das cavernas */
+    addWall(180, 176, 100, 10);
+    addWall(390, 150, 110, 10);
+    addWall(650, 184, 130, 10);
+    addWall(900, 160, 100, 10);
+    addWall(1150, 178, 130, 10);
+    addWall(1450, 145, 120, 10);
+    addWall(1750, 177, 140, 10);
+    addWall(2050, 155, 120, 10);
+
+    /* Plataformas da floresta */
+    addWall(2520, 174, 120, 10);
+    addWall(2740, 146, 100, 10);
+    addWall(2980, 180, 130, 10);
+    addWall(3220, 155, 110, 10);
+    addWall(3470, 176, 130, 10);
+    addWall(3700, 145, 110, 10);
+
+    /* Fortaleza */
+    addWall(4000, 177, 100, 10);
+    addWall(4210, 151, 120, 10);
+    addWall(4490, 178, 120, 10);
+
+    /* Zumbis */
+    for (i = 0; i < ZOMBIE_MAX; i++) {
+        zombies[i].x = 350.0f + i*190.0f;
+        zombies[i].y = FLOOR_Y-2;
+        zombies[i].vx = 0;
+        zombies[i].vy = 0;
+        zombies[i].anim = 0;
+        zombies[i].attack = 0;
+        zombies[i].hp = 3;
+        zombies[i].facing = -1;
+        zombies[i].grounded = 1;
+        zombies[i].alive = 1;
+        zombies[i].crippled = 0;
+        zombies[i].hurt = 0;
+    }
+
+    /* Aranhas de grama na floresta */
+    for (i = 0; i < SPIDER_MAX; i++) {
+        spiders[i].x = 2520.0f + i*300.0f;
+        spiders[i].y = FLOOR_Y-2;
+        spiders[i].vx = 0;
+        spiders[i].vy = 0;
+        spiders[i].anim = 0;
+        spiders[i].hp = 3;
+        spiders[i].hurt = 0;
+        spiders[i].facing = -1;
+        spiders[i].grounded = 1;
+        spiders[i].alive = 1;
+        spiders[i].state = 0;
+        spiders[i].jumpCooldown = 1.0f+(float)i*0.3f;
+    }
+
+    /* Golem da fortaleza */
+    boss.x = bossSpawnX;
+    boss.y = FLOOR_Y-2;
+    boss.vx = 0;
+    boss.vy = 0;
+    boss.anim = 0;
+    boss.hp = 100;
+    boss.facing = -1;
+    boss.grounded = 1;
+    boss.alive = 1;
+    boss.state = 0;
+    boss.timer = 0;
+    boss.hurt = 0;
+}
+
+/* PROJETEIS DE MAGIA */
+
+static void spawnMagic(void)
 {
     int i;
 
     if (magicCooldown > 0) return;
 
-    for (i=0; i<MAGIC_MAX; i++) {
+    for (i = 0; i < MAGIC_MAX; i++) {
         if (!shots[i].active) {
-            shots[i].x = player.x+player.facing*15;
-            shots[i].y = player.y-25;
-            shots[i].vx = player.facing*290;
-            shots[i].vy = 0;
+            shots[i].x = player.x + player.facing*12;
+            shots[i].y = player.y-22;
+            shots[i].vx = player.facing*260.0f;
+            shots[i].vy = -20.0f;
             shots[i].life = 1.5f;
             shots[i].active = 1;
-            magicCooldown = 0.4f;
-            break;
+            magicCooldown = 0.35f;
+            return;
+        }
+    }
+}
+
+/* ATAQUE DA ESPADA: cada inimigo recebe no maximo
+   um golpe por ataque. */
+
+static int swordHits(float x, float y, float radius)
+{
+    float sx = player.x + player.facing*20;
+    float sy = player.y-22;
+    float dx = x-sx;
+    float dy = y-sy;
+
+    if (player.attack <= 0 || swordHitDone)
+        return 0;
+
+    return dx*dx+dy*dy <= radius*radius;
+}
+
+/* ARANHA PERSEGUE O JOGADOR E SALTA */
+
+static void updateSpider(GrassSpider *s, float dt)
+{
+    float dx;
+    Actor a;
+
+    if (!s->alive) return;
+
+    s->anim += dt;
+    if (s->hurt > 0) s->hurt -= dt;
+    if (s->jumpCooldown > 0) s->jumpCooldown -= dt;
+
+    dx = player.x-s->x;
+    s->facing = (dx >= 0) ? 1 : -1;
+
+    if (fabsf(dx) < 260.0f) {
+        s->vx = s->facing*65.0f;
+
+        if (s->grounded && s->jumpCooldown <= 0 &&
+            fabsf(dx) < 190.0f) {
+            s->vy = -185.0f;
+            s->grounded = 0;
+            s->jumpCooldown = 1.7f;
+        }
+    } else {
+        s->vx = 0;
+    }
+
+    s->vy += 420.0f*dt;
+    if (s->vy > 330.0f) s->vy = 330.0f;
+
+    /* Usa a colisao de Actor para manter a aranha
+       dentro do mundo e sobre o chao. */
+    a.x = s->x;
+    a.y = s->y;
+    a.vx = s->vx;
+    a.vy = s->vy;
+    a.grounded = s->grounded;
+
+    collideActor(&a, dt);
+
+    s->x = a.x;
+    s->y = a.y;
+    s->vx = a.vx;
+    s->vy = a.vy;
+    s->grounded = a.grounded;
+
+    if (fabsf(dx) < 18.0f && player.hurt <= 0) {
+        player.hurt = 0.65f;
+        player.hp -= 1;
+    }
+
+    if (swordHits(s->x, s->y-12, 15.0f)) {
+        s->hp -= 1;
+        s->hurt = 0.12f;
+        swordHitDone = 1;
+        if (s->hp <= 0) s->alive = 0;
+    }
+}
+
+/* FIM DA PARTE 2 */
+/* ============================
+   PARTE 3: LOGICA E LOOP PRINCIPAL
+   ============================ */
+
+static void updatePlayer(float dt, SceCtrlData *pad)
+{
+    float move = 0;
+    unsigned int buttons = pad->Buttons;
+
+    if (pad->Lx < 110) move = -1.0f;
+    if (pad->Lx > 145) move = 1.0f;
+
+    if (buttons & PSP_CTRL_LEFT) move = -1.0f;
+    if (buttons & PSP_CTRL_RIGHT) move = 1.0f;
+
+    if (move != 0) {
+        player.facing = (move > 0) ? 1 : -1;
+        player.vx = move * ((buttons & PSP_CTRL_RTRIGGER) ? 220.0f : 150.0f);
+    } else {
+        player.vx = 0;
+    }
+
+    if ((buttons & PSP_CTRL_CROSS) && player.grounded) {
+        player.vy = -245.0f;
+        player.grounded = 0;
+    }
+
+    if ((buttons & PSP_CTRL_SQUARE) && player.attack <= 0) {
+        player.attack = 0.22f;
+        swordHitDone = 0;
+    }
+
+    if (buttons & PSP_CTRL_TRIANGLE)
+        spawnMagic();
+
+    if (player.attack > 0) {
+        player.attack -= dt;
+        if (player.attack < 0) player.attack = 0;
+    }
+
+    if (magicCooldown > 0) {
+        magicCooldown -= dt;
+        if (magicCooldown < 0) magicCooldown = 0;
+    }
+
+    if (player.hurt > 0) {
+        player.hurt -= dt;
+        if (player.hurt < 0) player.hurt = 0;
+    }
+
+    player.vy += 520.0f * dt;
+    if (player.vy > 400.0f) player.vy = 400.0f;
+
+    collideActor(&player, dt);
+
+    if (player.hp <= 0) {
+        player.hp = 0;
+        gameOver = 1;
+    }
+}
+
+static void updateZombies(float dt)
+{
+    int i;
+
+    for (i = 0; i < ZOMBIE_MAX; i++) {
+        Actor *z = &zombies[i];
+        float dx;
+
+        if (!z->alive) continue;
+
+        z->anim += dt;
+        if (z->hurt > 0) z->hurt -= dt;
+
+        dx = player.x-z->x;
+
+        if (fabsf(dx) < 210.0f) {
+            z->facing = dx >= 0 ? 1 : -1;
+            z->vx = z->facing*42.0f;
+        } else {
+            z->vx = 0;
+        }
+
+        z->vy += 420.0f*dt;
+        if (z->vy > 330.0f) z->vy = 330.0f;
+
+        collideActor(z, dt);
+
+        if (fabsf(player.x-z->x) < 17.0f &&
+            player.hurt <= 0) {
+            player.hp -= 1;
+            player.hurt = 0.7f;
+        }
+
+        if (swordHits(z->x, z->y-15, 18.0f)) {
+            z->hp -= 1;
+            z->hurt = 0.15f;
+            swordHitDone = 1;
+            if (z->hp <= 0) z->alive = 0;
         }
     }
 }
 
 static void updateMagic(float dt)
 {
-    int i,j;
+    int i, j;
 
-    if (magicCooldown>0) magicCooldown-=dt;
-    if (magicCooldown<0) magicCooldown=0;
-
-    for (i=0; i<MAGIC_MAX; i++) {
-        Magic *m=&shots[i];
+    for (i = 0; i < MAGIC_MAX; i++) {
+        Magic *m = &shots[i];
 
         if (!m->active) continue;
 
         m->x += m->vx*dt;
+        m->y += m->vy*dt;
         m->life -= dt;
 
-        if (m->life<=0 || m->x<0 || m->x>WORLD_W) {
-            m->active=0;
+        if (m->life <= 0 ||
+            m->x < 0 || m->x > WORLD_W) {
+            m->active = 0;
             continue;
         }
 
-        for (j=0; j<ZOMBIE_MAX; j++) {
-            Actor *z=&zombies[j];
+        for (j = 0; j < ZOMBIE_MAX; j++) {
+            Actor *z = &zombies[j];
 
-            if (z->alive &&
-                fabsf(m->x-z->x)<17 &&
-                fabsf(m->y-(z->y-20))<25) {
-                z->hp-=25;
-                z->hurt=0.15f;
-                m->active=0;
+            if (!z->alive) continue;
 
-                if (z->hp<=25 && !z->crippled)
-                    z->crippled=1;
+            if (fabsf(m->x-z->x) < 17 &&
+                fabsf(m->y-(z->y-18)) < 20) {
+                z->hp -= 2;
+                z->hurt = 0.15f;
+                m->active = 0;
 
-                if (z->hp<=0)
-                    z->alive=0;
+                if (z->hp <= 0) z->alive = 0;
                 break;
             }
         }
 
-        if (boss.alive && m->active &&
-            fabsf(m->x-boss.x)<35 &&
-            fabsf(m->y-(boss.y-25))<35) {
-            boss.hp-=20;
-            boss.hurt=0.12f;
-            m->active=0;
+        if (!m->active) continue;
 
-            if (boss.hp<=0) {
-                boss.hp=0;
-                boss.alive=0;
-                victory=1;
+        for (j = 0; j < SPIDER_MAX; j++) {
+            GrassSpider *s = &spiders[j];
+
+            if (!s->alive) continue;
+
+            if (fabsf(m->x-s->x) < 18 &&
+                fabsf(m->y-(s->y-12)) < 18) {
+                s->hp -= 2;
+                s->hurt = 0.15f;
+                m->active = 0;
+
+                if (s->hp <= 0) s->alive = 0;
+                break;
             }
+        }
+
+        if (!m->active) continue;
+
+        if (boss.alive &&
+            fabsf(m->x-boss.x) < 25 &&
+            fabsf(m->y-(boss.y-25)) < 30) {
+            boss.hp -= 4;
+            boss.hurt = 0.15f;
+            m->active = 0;
+
+            if (boss.hp <= 0) {
+                boss.hp = 0;
+                boss.alive = 0;
+                victory = 1;
+            }
+        }
+    }
+}
+
+static void updateBoss(float dt)
+{
+    float dx;
+
+    if (!boss.alive || player.x < BOSS_START-180)
+        return;
+
+    boss.timer += dt;
+    if (boss.hurt > 0) boss.hurt -= dt;
+
+    dx = player.x-boss.x;
+    boss.facing = dx >= 0 ? 1 : -1;
+
+    if (fabsf(dx) > 30) {
+        boss.vx = boss.facing*35.0f;
+    } else {
+        boss.vx = 0;
+    }
+
+    if (boss.grounded && boss.timer > 2.0f &&
+        fabsf(dx) < 160.0f) {
+        boss.vy = -155.0f;
+        boss.grounded = 0;
+        boss.timer = 0;
+    }
+
+    boss.x += boss.vx*dt;
+    boss.vy += 420.0f*dt;
+    if (boss.vy > 330.0f) boss.vy = 330.0f;
+    boss.y += boss.vy*dt;
+
+    if (boss.y+2 >= FLOOR_Y) {
+        boss.y = FLOOR_Y-2;
+        boss.vy = 0;
+        boss.grounded = 1;
+    }
+
+    if (fabsf(dx) < 30.0f && player.hurt <= 0) {
+        player.hp -= 2;
+        player.hurt = 0.8f;
+    }
+
+    if (swordHits(boss.x, boss.y-25, 32.0f)) {
+        boss.hp -= 2;
+        boss.hurt = 0.15f;
+        swordHitDone = 1;
+
+        if (boss.hp <= 0) {
+            boss.hp = 0;
+            boss.alive = 0;
+            victory = 1;
+        }
+    }
+}
+
+/* CENARIO */
+
+static void drawBackground(void)
+{
+    int i;
+
+    rect(0, 0, SW, SH, 0xFF10101E);
+
+    /* Lua / luz distante */
+    circle(405, 48, 18, 0xFFAAA3C8);
+    circle(412, 43, 17, 0xFF10101E);
+
+    /* Silhuetas ao fundo */
+    if (player.x >= FOREST_START &&
+        player.x < BOSS_START) {
+        for (i = 0; i < 8; i++) {
+            float tx = (float)i*80.0f -
+                       fmodf(cameraX*0.25f, 80.0f);
+
+            tri(tx, 190, tx+35, 70, tx+70, 190,
+                0xFF182B25);
+            rect(tx+30, 150, 10, 74, 0xFF182B25);
+        }
+    } else {
+        for (i = 0; i < 7; i++) {
+            float tx = (float)i*90.0f -
+                       fmodf(cameraX*0.2f, 90.0f);
+
+            tri(tx, 190, tx+45, 95, tx+90, 190,
+                0xFF242034);
+        }
+    }
+
+    /* Chao */
+    rect(0, FLOOR_Y, SW, SH-FLOOR_Y, 0xFF292631);
+    rect(0, FLOOR_Y, SW, 3, 0xFF57515F);
+
+    /* Plataformas */
+    for (i = 0; i < wallCount; i++) {
+        float x = walls[i].x-cameraX;
+
+        if (x > -walls[i].w && x < SW) {
+            rect(x, walls[i].y, walls[i].w,
+                 walls[i].h, 0xFF3D3948);
+            rect(x, walls[i].y, walls[i].w,
+                 2, 0xFF777080);
         }
     }
 }
@@ -450,342 +842,13 @@ static void drawMagic(void)
 {
     int i;
 
-    for (i=0; i<MAGIC_MAX; i++) {
-        Magic *m=&shots[i];
-        float x,y;
+    for (i = 0; i < MAGIC_MAX; i++) {
+        Magic *m = &shots[i];
 
         if (!m->active) continue;
 
-        x=m->x-cameraX;
-        y=m->y;
-
-        line(x-m->vx*.04f,y,x,y,4,WHITE);
-        circle(x,y,5,WHITE);
-        circle(x,y,2,BLACK);
-    }
-}
-
-/* -------------------------------------------------- */
-/* ZUMBIS                                              */
-/* -------------------------------------------------- */
-
-static void updateZombies(float dt)
-{
-    int i;
-
-    for (i=0; i<ZOMBIE_MAX; i++) {
-        Actor *z=&zombies[i];
-
-        if (!z->alive) continue;
-
-        if (z->hurt>0) z->hurt-=dt;
-        z->anim+=dt;
-
-        if (fabsf(player.x-z->x)<420) {
-            z->facing=player.x>z->x ? 1 : -1;
-            z->vx=z->facing*(z->crippled?24:52);
-
-            if (fabsf(player.x-z->x)<23 &&
-                fabsf(player.y-z->y)<30) {
-                player.hp-=10*dt;
-                if (player.hp<0) player.hp=0;
-            }
-        } else {
-            z->vx=0;
-        }
-
-        z->vy+=850*dt;
-        collideActor(z,dt);
-    }
-}
-
-static void drawZombie(Actor *z)
-{
-    float x=z->x-cameraX;
-    float y=z->y;
-    float w=z->crippled?8:12;
-    float step=sinf(z->anim*7)*4;
-
-    if (!z->alive) return;
-
-    /* Corpo irregular */
-    tri(x-w,y-29,x+w,y-27,x+2,y-8,BLACK);
-    circle(x,y-34,7,z->hurt>0?WHITE:GRAY);
-
-    /* Bracos */
-    line(x-7,y-25,x-14,y-15+step,5,BLACK);
-    line(x+7,y-25,x+13,y-17-step,5,GRAY);
-
-    /* Perna: aleijado arrasta o corpo e apoia-se num membro */
-    if (z->crippled) {
-        line(x,y-10,x+10+step,y-2,5,BLACK);
-        line(x-3,y-13,x-13,y-8,4,GRAY);
-    } else {
-        line(x-4,y-12,x-7+step,y-1,5,BLACK);
-        line(x+4,y-12,x+7-step,y-1,5,GRAY);
-    }
-
-    rect(x+1,y-35,4,2,WHITE);
-}
-
-/* -------------------------------------------------- */
-/* GOLEM                                               */
-/* -------------------------------------------------- */
-
-static void updateBoss(float dt)
-{
-    float distance;
-
-    if (!boss.alive || player.x<bossSpawnX-500) return;
-
-    boss.anim+=dt;
-    boss.timer-=dt;
-    if (boss.hurt>0) boss.hurt-=dt;
-
-    distance=fabsf(player.x-boss.x);
-
-    if (boss.state==0) {
-        boss.vx=0;
-
-        if (boss.timer<=0) {
-            boss.state=1;
-            boss.timer=0.7f;
-            boss.facing=player.x>boss.x?1:-1;
-        }
-    } else if (boss.state==1) {
-        /* Preparacao do dash */
-        boss.vx=0;
-
-        if (boss.timer<=0) {
-            boss.state=2;
-            boss.vx=boss.facing*270;
-            boss.timer=0.65f;
-        }
-    } else if (boss.state==2) {
-        /* Dash */
-        if (boss.timer<=0) {
-            boss.state=3;
-            boss.vy=-330;
-            boss.timer=0.8f;
-        }
-    } else if (boss.state==3) {
-        /* Salto */
-        if (boss.grounded && boss.timer<0.6f) {
-            boss.state=0;
-            boss.timer=1.5f;
-        }
-    }
-
-    if (boss.state!=2)
-        boss.vx*=0.90f;
-
-    boss.vy+=850*dt;
-    boss.x+=boss.vx*dt;
-    boss.y+=boss.vy*dt;
-
-    boss.grounded=0;
-
-    if (boss.y>=FLOOR_Y-54) {
-        boss.y=FLOOR_Y-54;
-        boss.vy=0;
-        boss.grounded=1;
-    }
-
-    if (boss.x<ZONE_W) boss.x=ZONE_W;
-    if (boss.x>WORLD_W-40) boss.x=WORLD_W-40;
-
-    if (distance<48 && boss.state==2)
-        player.hp-=35*dt;
-
-    if (player.hp<=0) {
-        player.hp=0;
-        gameOver=1;
-    }
-}
-
-static void drawBoss(void)
-{
-    float x=boss.x-cameraX;
-    float y=boss.y;
-    float bounce=sinf(boss.anim*8)*2;
-
-    if (!boss.alive) return;
-
-    /* Golem rochoso, grande e pesado */
-    rect(x-24,y-48+bounce,48,40,
-         boss.hurt>0?WHITE:BLACK);
-
-    rect(x-31,y-43+bounce,14,28,GRAY);
-    rect(x+17,y-43+bounce,14,28,GRAY);
-
-    rect(x-20,y-8,13,8,BLACK);
-    rect(x+8,y-8,13,8,BLACK);
-
-    circle(x-10,y-35+bounce,3,WHITE);
-    circle(x+10,y-35+bounce,3,WHITE);
-
-    /* Fissuras rochosas */
-    line(x-5,y-28,x,y-20,2,GRAY);
-    line(x+6,y-24,x+2,y-16,2,GRAY);
-
-    /* Barra de vida */
-    rect(x-28,y-60,56,4,BLACK);
-    rect(x-27,y-59,54*(boss.hp/500.0f),2,WHITE);
-}
-
-/* -------------------------------------------------- */
-/* CENARIOS                                            */
-/* -------------------------------------------------- */
-
-static void drawBackground(void)
-{
-    int i;
-
-    rect(0,0,SW,SH,BLACK);
-
-    for (i=0; i<8; i++) {
-        float x=i*90-fmodf(cameraX*.15f,90);
-
-        tri(x-35,190,x+35,75+(i%3)*12,x+105,190,DARK);
-    }
-
-    circle(400,45,18,WHITE);
-    circle(408,38,16,BLACK);
-}
-
-static void drawWorld(void)
-{
-    int i;
-
-    /* Chao continuo */
-    rect(0,FLOOR_Y,SW,SH-FLOOR_Y,DARK);
-    rect(0,FLOOR_Y,SW,4,GRAY);
-
-    for (i=0; i<wallCount; i++) {
-        float x=walls[i].x-cameraX;
-        float y=walls[i].y;
-
-        if (x<-walls[i].w || x>SW) continue;
-
-        rect(x,y,walls[i].w,walls[i].h,DARK);
-        rect(x,y,walls[i].w,3,GRAY);
-
-        line(x+4,y+5,x+walls[i].w*.4f,y+walls[i].h-3,
-             2,BLACK);
-    }
-
-    /* Portal entre as zonas */
-    {
-        float x=ZONE_W-cameraX;
-
-        if (x>-30 && x<SW+30) {
-            rect(x-15,FLOOR_Y-58,30,58,BLACK);
-            rect(x-10,FLOOR_Y-53,20,53,PURPLE);
-            rect(x-5,FLOOR_Y-48,10,48,WHITE);
-        }
-    }
-
-    /* Marcadores visuais da zona */
-    if (cameraX<ZONE_W)
-        rect(12,12,4,4,WHITE);
-    else
-        rect(12,12,4,4,PURPLE);
-}
-
-/* -------------------------------------------------- */
-/* ATUALIZACAO                                         */
-/* -------------------------------------------------- */
-
-static void updatePlayer(float dt, SceCtrlData pad,
-                         unsigned int pressed)
-{
-    float move=0;
-    float speed=145;
-
-    if (pad.Buttons&PSP_CTRL_LEFT) move-=1;
-    if (pad.Buttons&PSP_CTRL_RIGHT) move+=1;
-
-    if (pad.Lx<105)
-        move-= (105-pad.Lx)/105.0f;
-
-    if (pad.Lx>150)
-        move+= (pad.Lx-150)/105.0f;
-
-    if (move<-1) move=-1;
-    if (move>1) move=1;
-
-    if (pad.Buttons&PSP_CTRL_RTRIGGER) speed=220;
-
-    player.vx=move*speed;
-
-    if (move>.1f) player.facing=1;
-    if (move<-.1f) player.facing=-1;
-
-    if ((pressed&PSP_CTRL_CROSS) && player.grounded) {
-        player.vy=-340;
-        player.grounded=0;
-    }
-
-    if ((pressed&PSP_CTRL_SQUARE) && player.attack<=0)
-        player.attack=.48f;
-
-    if (pressed&PSP_CTRL_TRIANGLE)
-        castMagic();
-
-    if (player.attack>0) {
-        player.attack-=dt;
-        if (player.attack<0) player.attack=0;
-    }
-
-    player.vy+=850*dt;
-    collideActor(&player,dt);
-
-    player.anim+=dt;
-
-    if (player.x-cameraX>SW*.65f)
-        cameraX=player.x-SW*.65f;
-
-    if (cameraX<0) cameraX=0;
-    if (cameraX>WORLD_W-SW) cameraX=WORLD_W-SW;
-}
-
-static void swordHit(void)
-{
-    int i;
-    float range=52;
-
-    if (player.attack<.25f && player.attack>.12f) {
-        for (i=0; i<ZOMBIE_MAX; i++) {
-            Actor *z=&zombies[i];
-
-            if (!z->alive) continue;
-
-            if (fabsf(z->x-player.x)<range &&
-                fabsf(z->y-player.y)<45 &&
-                (z->x-player.x)*player.facing>-10) {
-                z->hp-=30;
-                z->hurt=.12f;
-
-                if (z->hp<=20 && !z->crippled)
-                    z->crippled=1;
-
-                if (z->hp<=0)
-                    z->alive=0;
-            }
-        }
-
-        if (boss.alive &&
-            fabsf(boss.x-player.x)<60 &&
-            fabsf(boss.y-player.y)<60) {
-            boss.hp-=15;
-            boss.hurt=.12f;
-
-            if (boss.hp<=0) {
-                boss.hp=0;
-                boss.alive=0;
-                victory=1;
-            }
-        }
+        circle(m->x-cameraX, m->y, 6, 0xFF713B91);
+        circle(m->x-cameraX, m->y, 3, 0xFFDAB4FF);
     }
 }
 
@@ -793,121 +856,142 @@ static void drawHUD(void)
 {
     int i;
 
-    rect(12,12,104,7,BLACK);
-    rect(14,14,100*(player.hp/100.0f),3,WHITE);
-
-    for (i=0; i<3; i++)
-        rect(14+i*8,25,5,3,
-             magicCooldown<=0?WHITE:GRAY);
-
-    if (boss.alive && player.x>bossSpawnX-500) {
-        rect(150,12,180,8,BLACK);
-        rect(152,14,176*(boss.hp/500.0f),4,WHITE);
+    /* Vida do jogador */
+    rect(10, 10, 104, 10, 0xFF3D2028);
+    for (i = 0; i < (int)player.hp; i++) {
+        rect(12+i*10, 12, 8, 6, 0xFFE84A55);
     }
 
-    if (gameOver) {
-        rect(150,115,180,35,BLACK);
-        rect(170,130,140,3,WHITE);
-    }
-
-    if (victory) {
-        rect(150,115,180,35,WHITE);
-        rect(170,130,140,3,BLACK);
+    /* Nome da zona representado por barras */
+    if (player.x < FOREST_START) {
+        rect(190, 10, 100, 4, 0xFF55506B);
+    } else if (player.x < BOSS_START) {
+        rect(190, 10, 100, 4, 0xFF4C8B45);
+    } else {
+        rect(190, 10, 100, 4, 0xFF817985);
     }
 }
 
-/* -------------------------------------------------- */
-/* GRAFICOS                                            */
-/* -------------------------------------------------- */
+static void drawGame(void)
+{
+    int i;
 
-static void graphicsInit(void)
+    sceGuStart(GU_DIRECT, list);
+
+    drawBackground();
+
+    for (i = 0; i < ZOMBIE_MAX; i++)
+        drawZombie(&zombies[i]);
+
+    for (i = 0; i < SPIDER_MAX; i++)
+        drawSpider(&spiders[i]);
+
+    drawMagic();
+    drawBoss();
+
+    /* Piscar durante invulnerabilidade */
+    if (player.hurt <= 0 ||
+        ((int)(worldTime*12.0f)%2 == 0)) {
+        drawPlayer();
+    }
+
+    drawHUD();
+
+    if (gameOver) {
+        rect(100, 100, 280, 45, 0xFF521D2A);
+        rect(120, 120, 240, 4, WHITE);
+    } else if (victory) {
+        rect(100, 100, 280, 45, 0xFF244B35);
+        rect(120, 120, 240, 4, LGREEN);
+    }
+
+    sceGuFinish();
+    sceGuSync(0, 0);
+}
+
+/* INICIALIZACAO DO PSP */
+
+static void initGraphics(void)
 {
     sceGuInit();
 
-    sceGuStart(GU_DIRECT,list);
+    sceGuStart(GU_DIRECT, list);
+    sceGuDrawBuffer(GU_PSM_8888,
+        (void*)0, STRIDE);
+    sceGuDispBuffer(SW, SH,
+        (void*)0x88000, STRIDE);
+    sceGuDepthBuffer((void*)0x110000, STRIDE);
 
-    sceGuDrawBuffer(GU_PSM_8888,(void*)0,STRIDE);
-    sceGuDispBuffer(SW,SH,(void*)0x88000,STRIDE);
-    sceGuDepthBuffer((void*)0x110000,STRIDE);
-
-    sceGuOffset(2048-SW/2,2048-SH/2);
-    sceGuViewport(2048,2048,SW,SH);
-    sceGuScissor(0,0,SW,SH);
-
+    sceGuOffset(2048-(SW/2), 2048-(SH/2));
+    sceGuViewport(2048, 2048, SW, SH);
+    sceGuDepthRange(65535, 0);
+    sceGuScissor(0, 0, SW, SH);
     sceGuEnable(GU_SCISSOR_TEST);
     sceGuDisable(GU_DEPTH_TEST);
-    sceGuDisable(GU_CULL_FACE);
-    sceGuDisable(GU_TEXTURE_2D);
-
+    sceGuShadeModel(GU_FLAT);
     sceGuFinish();
-    sceGuSync(0,0);
+    sceGuSync(0, 0);
 
-    sceDisplayWaitVblankStart();
     sceGuDisplay(GU_TRUE);
 }
 
-/* -------------------------------------------------- */
-/* MAIN                                                */
-/* -------------------------------------------------- */
+/* LOOP PRINCIPAL */
 
 int main(void)
 {
     SceCtrlData pad;
-    unsigned int last=0;
-    unsigned int now;
-    unsigned int pressed;
-    const float dt=1.0f/60.0f;
+    unsigned int oldButtons = 0;
+    float dt = 1.0f/60.0f;
+    int i;
 
     sceCtrlSetSamplingCycle(0);
     sceCtrlSetSamplingMode(PSP_CTRL_MODE_ANALOG);
 
+    initGraphics();
     initWorld();
-    graphicsInit();
+
+    memset(&player, 0, sizeof(player));
+    player.x = 80;
+    player.y = FLOOR_Y-2;
+    player.hp = 10;
+    player.facing = 1;
+    player.grounded = 1;
+    player.alive = 1;
+
+    for (i = 0; i < MAGIC_MAX; i++)
+        shots[i].active = 0;
 
     while (running) {
-        sceCtrlReadBufferPositive(&pad,1);
+        sceCtrlReadBufferPositive(&pad, 1);
 
-        now=pad.Buttons;
-        pressed=now&~last;
+        if ((pad.Buttons & PSP_CTRL_START) &&
+            !(oldButtons & PSP_CTRL_START)) {
+            running = 0;
+        }
 
-        if (pressed&PSP_CTRL_START)
-            running=0;
+        worldTime += dt;
 
         if (!gameOver && !victory) {
-            updatePlayer(dt,pad,pressed);
+            updatePlayer(dt, &pad);
             updateZombies(dt);
+
+            for (i = 0; i < SPIDER_MAX; i++)
+                updateSpider(&spiders[i], dt);
+
             updateMagic(dt);
             updateBoss(dt);
-            swordHit();
         }
 
-        worldTime+=dt;
+        cameraX = player.x-(SW/2);
 
-        sceGuStart(GU_DIRECT,list);
-        sceGuClearColor(BLACK);
-        sceGuClear(GU_COLOR_BUFFER_BIT);
+        if (cameraX < 0) cameraX = 0;
+        if (cameraX > WORLD_W-SW)
+            cameraX = WORLD_W-SW;
 
-        drawBackground();
-        drawWorld();
+        drawGame();
 
-        {
-            int i;
-
-            for (i=0; i<ZOMBIE_MAX; i++)
-                drawZombie(&zombies[i]);
-        }
-
-        drawBoss();
-        drawPlayer();
-        drawMagic();
-        drawHUD();
-
-        sceGuFinish();
-        sceGuSync(0,0);
         sceDisplayWaitVblankStart();
-        sceGuSwapBuffers();
-
-        last=now;
+        oldButtons = pad.Buttons;
     }
 
     sceGuTerm();
