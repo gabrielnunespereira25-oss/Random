@@ -1,6 +1,7 @@
+
 /*
  * RANDOM - PSP / PSPSDK
- * Player com 16 sprites PNG.
+ * Versao com 16 sprites PNG reais.
  *
  * Controles:
  * Direcional: mover
@@ -9,6 +10,9 @@
  * Quadrado: ataque
  * Circulo: magia
  * Start: pausar
+ *
+ * Pasta dos sprites:
+ * assets/sprites/*.png
  *
  * Requer PSPSDK, libpng e zlib.
  */
@@ -24,7 +28,6 @@
 #include <string.h>
 #include <malloc.h>
 #include <setjmp.h>
-#include <math.h>
 
 PSP_MODULE_INFO("RANDOM", 0, 1, 0);
 PSP_MAIN_THREAD_ATTR(THREAD_ATTR_USER | THREAD_ATTR_VFPU);
@@ -33,16 +36,20 @@ PSP_MAIN_THREAD_ATTR(THREAD_ATTR_USER | THREAD_ATTR_VFPU);
 #define SCREEN_H 272
 #define BUF_W 512
 
-#define GRAVITY 0.42f
-#define JUMP_SPEED -7.6f
-#define WALK_SPEED 2.3f
-#define RUN_SPEED 3.8f
+#define GRAVITY       0.42f
+#define JUMP_SPEED   -7.6f
+#define WALK_SPEED    2.3f
+#define RUN_SPEED     3.8f
 
-#define PLAYER_W 64.0f
-#define PLAYER_H 82.0f
-#define GROUND_Y 180.0f
+#define PLAYER_W      82.0f
+#define PLAYER_H      82.0f
 
-#define SPRITE_COUNT 16
+/* Topo do chao: 210.
+   playerY representa o topo do personagem. */
+#define FLOOR_Y       210.0f
+#define GROUND_Y      (FLOOR_Y - PLAYER_H)
+
+#define SPRITE_COUNT  16
 
 typedef struct {
     unsigned int *pixels;
@@ -84,8 +91,15 @@ static const char *spriteNames[SPRITE_COUNT] = {
 };
 
 enum {
-    IDLE, WALK, RUN, JUMP, FALL,
-    LAND, ATTACK, HURT, MAGIC
+    IDLE,
+    WALK,
+    RUN,
+    JUMP,
+    FALL,
+    LAND,
+    ATTACK,
+    HURT,
+    MAGIC
 };
 
 static float playerX = 80.0f;
@@ -95,25 +109,22 @@ static float velocityY = 0.0f;
 static float animationTime = 0.0f;
 static float attackTime = 0.0f;
 static float magicTime = 0.0f;
+static float hurtTime = 0.0f;
+static float landTime = 0.0f;
 
 static int facing = 1;
 static int grounded = 1;
 static int jumpCount = 0;
 static int paused = 0;
 static int magicUnlocked = 1;
+
 static int currentState = IDLE;
 static int animationFrame = 0;
 
 static unsigned int previousButtons = 0;
 
-static void drawRect(
-    float x, float y,
-    float width, float height,
-    unsigned int color
-);
-
 /* ---------------------------------------------------------
-   Utilitarios
+   Memoria e texturas
    --------------------------------------------------------- */
 
 static int nextPowerOfTwo(int n)
@@ -137,15 +148,14 @@ static void resetTexture(Texture *t)
 
 static void freeTexture(Texture *t)
 {
-    if (t->pixels) {
+    if (t->pixels)
         free(t->pixels);
-    }
 
     resetTexture(t);
 }
 
 /* ---------------------------------------------------------
-   Carregamento PNG corrigido
+   Carregamento PNG com transparencia
    --------------------------------------------------------- */
 
 static int loadPNG(const char *path, Texture *t)
@@ -180,19 +190,21 @@ static int loadPNG(const char *path, Texture *t)
         return 0;
     }
 
-    unsigned char *rgba = NULL;
-    png_bytep *rows = NULL;
-    unsigned int *pixels = NULL;
+    /*
+     * Volatile evita problemas com variaveis locais
+     * modificadas depois de setjmp em caso de erro PNG.
+     */
+    unsigned char * volatile rgba = NULL;
+    png_bytep * volatile rows = NULL;
+    unsigned int * volatile pixels = NULL;
 
     if (setjmp(png_jmpbuf(png))) {
         if (pixels)
-            free(pixels);
-
+            free((void *)pixels);
         if (rows)
-            free(rows);
-
+            free((void *)rows);
         if (rgba)
-            free(rgba);
+            free((void *)rgba);
 
         png_destroy_read_struct(&png, &info, NULL);
         fclose(file);
@@ -203,11 +215,8 @@ static int loadPNG(const char *path, Texture *t)
     png_set_sig_bytes(png, 8);
     png_read_info(png, info);
 
-    png_uint_32 pngWidth = png_get_image_width(png, info);
-    png_uint_32 pngHeight = png_get_image_height(png, info);
-
-    int width = (int)pngWidth;
-    int height = (int)pngHeight;
+    int width = (int)png_get_image_width(png, info);
+    int height = (int)png_get_image_height(png, info);
 
     int colorType = png_get_color_type(png, info);
     int bitDepth = png_get_bit_depth(png, info);
@@ -269,8 +278,10 @@ static int loadPNG(const char *path, Texture *t)
     );
 
     if (!rgba || !rows) {
-        free(rgba);
-        free(rows);
+        if (rgba)
+            free((void *)rgba);
+        if (rows)
+            free((void *)rows);
 
         png_destroy_read_struct(&png, &info, NULL);
         fclose(file);
@@ -278,10 +289,11 @@ static int loadPNG(const char *path, Texture *t)
     }
 
     for (int y = 0; y < height; y++) {
-        rows[y] = rgba + (size_t)y * rowBytes;
+        ((png_bytep *)rows)[y] =
+            (png_bytep)rgba + (size_t)y * rowBytes;
     }
 
-    png_read_image(png, rows);
+    png_read_image(png, (png_bytepp)rows);
     png_read_end(png, NULL);
 
     pixels = (unsigned int *)memalign(
@@ -290,8 +302,8 @@ static int loadPNG(const char *path, Texture *t)
     );
 
     if (!pixels) {
-        free(rgba);
-        free(rows);
+        free((void *)rgba);
+        free((void *)rows);
 
         png_destroy_read_struct(&png, &info, NULL);
         fclose(file);
@@ -299,7 +311,7 @@ static int loadPNG(const char *path, Texture *t)
     }
 
     memset(
-        pixels,
+        (void *)pixels,
         0,
         (size_t)textureW * textureH * 4
     );
@@ -308,28 +320,34 @@ static int loadPNG(const char *path, Texture *t)
         memcpy(
             (unsigned char *)pixels +
                 (size_t)y * textureW * 4,
-            rgba + (size_t)y * rowBytes,
+            (unsigned char *)rgba +
+                (size_t)y * rowBytes,
             (size_t)width * 4
         );
     }
 
-    free(rgba);
-    free(rows);
+    free((void *)rgba);
+    free((void *)rows);
 
     png_destroy_read_struct(&png, &info, NULL);
     fclose(file);
 
-    t->pixels = pixels;
+    t->pixels = (unsigned int *)pixels;
     t->w = width;
     t->h = height;
     t->tw = textureW;
     t->th = textureH;
 
+    sceKernelDcacheWritebackRange(
+        t->pixels,
+        (size_t)t->tw * t->th * 4
+    );
+
     return 1;
 }
 
 /* ---------------------------------------------------------
-   Procura os PNGs em varios caminhos
+   Carregamento dos 16 sprites
    --------------------------------------------------------- */
 
 static int loadSprite(int index)
@@ -337,15 +355,6 @@ static int loadSprite(int index)
     char path[192];
 
     resetTexture(&sprites[index]);
-
-    snprintf(
-        path, sizeof(path),
-        "assets/sprites/%s",
-        spriteNames[index]
-    );
-
-    if (loadPNG(path, &sprites[index]))
-        return 1;
 
     snprintf(
         path, sizeof(path),
@@ -367,11 +376,14 @@ static int loadSprite(int index)
 
     snprintf(
         path, sizeof(path),
-        "ms0:/PSP/GAME/RANDOM/%s",
+        "assets/sprites/%s",
         spriteNames[index]
     );
 
-    return loadPNG(path, &sprites[index]);
+    if (loadPNG(path, &sprites[index]))
+        return 1;
+
+    return 0;
 }
 
 /* ---------------------------------------------------------
@@ -383,7 +395,7 @@ static void drawRect(
     float width, float height,
     unsigned int color)
 {
-    if (width <= 0.0f || height <= 0.0f)
+    if (width <= 0 || height <= 0)
         return;
 
     sceGuDisable(GU_TEXTURE_2D);
@@ -406,14 +418,13 @@ static void drawRect(
 
     sceGuDrawArray(
         GU_SPRITES,
-        GU_VERTEX_32BITF |
-        GU_TRANSFORM_2D,
+        GU_VERTEX_32BITF | GU_TRANSFORM_2D,
         2, 0, v
     );
 }
 
 /* ---------------------------------------------------------
-   Player provisório caso um PNG falhe
+   Personagem reserva se algum PNG nao carregar
    --------------------------------------------------------- */
 
 static void drawFallbackPlayer(
@@ -423,97 +434,61 @@ static void drawFallbackPlayer(
 {
     float cx = x + width * 0.5f;
 
-    /* Pernas */
-    drawRect(
-        cx - width * 0.20f,
-        y + height * 0.67f,
-        width * 0.16f,
-        height * 0.27f,
-        0xFF29223B
-    );
+    drawRect(cx - width * 0.20f,
+             y + height * 0.67f,
+             width * 0.16f, height * 0.27f,
+             0xFF29223B);
 
-    drawRect(
-        cx + width * 0.04f,
-        y + height * 0.67f,
-        width * 0.16f,
-        height * 0.27f,
-        0xFF29223B
-    );
+    drawRect(cx + width * 0.04f,
+             y + height * 0.67f,
+             width * 0.16f, height * 0.27f,
+             0xFF29223B);
 
-    /* Botas */
-    drawRect(
-        cx - width * 0.24f,
-        y + height * 0.91f,
-        width * 0.23f,
-        height * 0.08f,
-        0xFF17131F
-    );
+    drawRect(cx - width * 0.24f,
+             y + height * 0.91f,
+             width * 0.23f, height * 0.08f,
+             0xFF17131F);
 
-    drawRect(
-        cx + width * 0.01f,
-        y + height * 0.91f,
-        width * 0.23f,
-        height * 0.08f,
-        0xFF17131F
-    );
+    drawRect(cx + width * 0.01f,
+             y + height * 0.91f,
+             width * 0.23f, height * 0.08f,
+             0xFF17131F);
 
-    /* Corpo */
-    drawRect(
-        cx - width * 0.23f,
-        y + height * 0.32f,
-        width * 0.46f,
-        height * 0.39f,
-        0xFF34304F
-    );
+    drawRect(cx - width * 0.23f,
+             y + height * 0.32f,
+             width * 0.46f, height * 0.39f,
+             0xFF34304F);
 
-    /* Faixa */
-    drawRect(
-        cx - width * 0.23f,
-        y + height * 0.56f,
-        width * 0.46f,
-        height * 0.06f,
-        0xFFFF6B35
-    );
+    drawRect(cx - width * 0.23f,
+             y + height * 0.56f,
+             width * 0.46f, height * 0.06f,
+             0xFFFF6B35);
 
-    /* Braço */
-    drawRect(
-        flip ? cx - width * 0.34f : cx + width * 0.17f,
-        y + height * 0.39f,
-        width * 0.17f,
-        height * 0.25f,
-        0xFF34304F
-    );
+    drawRect(flip ? cx - width * 0.34f :
+                    cx + width * 0.17f,
+             y + height * 0.39f,
+             width * 0.17f, height * 0.25f,
+             0xFF34304F);
 
-    /* Cabeça */
-    drawRect(
-        cx - width * 0.22f,
-        y + height * 0.07f,
-        width * 0.44f,
-        height * 0.28f,
-        0xFFB87552
-    );
+    drawRect(cx - width * 0.22f,
+             y + height * 0.07f,
+             width * 0.44f, height * 0.28f,
+             0xFFB87552);
 
-    /* Cabelo */
-    drawRect(
-        cx - width * 0.24f,
-        y + height * 0.06f,
-        width * 0.48f,
-        height * 0.09f,
-        0xFF17131F
-    );
+    drawRect(cx - width * 0.24f,
+             y + height * 0.06f,
+             width * 0.48f, height * 0.09f,
+             0xFF17131F);
 
-    /* Olho */
-    drawRect(
-        flip ? cx - width * 0.16f : cx + width * 0.08f,
-        y + height * 0.18f,
-        width * 0.07f,
-        height * 0.04f,
-        0xFFFFFFFF
-    );
+    drawRect(flip ? cx - width * 0.16f :
+                    cx + width * 0.08f,
+             y + height * 0.18f,
+             width * 0.07f, height * 0.04f,
+             0xFFFFFFFF);
 }
 
 /* ---------------------------------------------------------
-   Desenho de texturas com proporcao preservada
+   Desenho do PNG com transparencia e espelhamento
    --------------------------------------------------------- */
 
 static void drawTexture(
@@ -530,9 +505,11 @@ static void drawTexture(
         return;
     }
 
-    float aspect = (float)texture->w /
-                   (float)texture->h;
-
+    /*
+     * Preserva a proporcao original do sprite.
+     * O personagem fica alinhado pelos pes.
+     */
+    float aspect = (float)texture->w / texture->h;
     float drawW = height * aspect;
     float drawH = height;
 
@@ -599,6 +576,7 @@ static void drawTexture(
 static void initializeGraphics(void)
 {
     sceGuInit();
+
     sceGuStart(GU_DIRECT, displayList);
 
     sceGuDrawBuffer(
@@ -624,17 +602,20 @@ static void initializeGraphics(void)
         2048 - SCREEN_H / 2
     );
 
-    sceGuViewport(2048, 2048, SCREEN_W, SCREEN_H);
+    sceGuViewport(
+        2048, 2048, SCREEN_W, SCREEN_H
+    );
+
     sceGuScissor(0, 0, SCREEN_W, SCREEN_H);
 
     sceGuEnable(GU_SCISSOR_TEST);
     sceGuDisable(GU_DEPTH_TEST);
     sceGuDisable(GU_CULL_FACE);
     sceGuDisable(GU_TEXTURE_2D);
-    sceGuShadeModel(GU_SMOOTH);
 
     sceGuFinish();
     sceGuSync(0, 0);
+
     sceDisplayWaitVblankStart();
     sceGuDisplay(GU_TRUE);
 }
@@ -659,28 +640,29 @@ static void endFrame(void)
 {
     sceGuFinish();
     sceGuSync(0, 0);
+
     sceDisplayWaitVblankStart();
     sceGuSwapBuffers();
 }
 
 /* ---------------------------------------------------------
-   Seleciona o sprite correto
+   Escolha da animacao
    --------------------------------------------------------- */
 
 static int chooseSprite(void)
 {
     switch (currentState) {
     case IDLE:
-        return animationFrame & 1;
+        return animationFrame % 2;
 
     case WALK:
-        return 2 + (animationFrame & 1);
+        return 2 + (animationFrame % 2);
 
     case RUN:
-        return 4 + (animationFrame & 3);
+        return 4 + (animationFrame % 4);
 
     case JUMP:
-        return 8 + (animationFrame & 1);
+        return 8 + (animationFrame % 2);
 
     case FALL:
         return 10;
@@ -703,13 +685,13 @@ static int chooseSprite(void)
 }
 
 /* ---------------------------------------------------------
-   Cenario provisorio
+   Cenario provisiorio de teste
    --------------------------------------------------------- */
 
 static void drawCave(void)
 {
     drawRect(
-        0, 210, SCREEN_W, 62,
+        0, FLOOR_Y, SCREEN_W, SCREEN_H - FLOOR_Y,
         0xFF292436
     );
 
@@ -719,60 +701,76 @@ static void drawCave(void)
     );
 
     drawRect(
-        0, 208, SCREEN_W, 4,
+        0, FLOOR_Y - 2, SCREEN_W, 4,
         0xFF56506B
     );
 
     drawRect(
-        25, 160, 38, 48,
+        25, 160, 38, 50,
         0xFF302B40
     );
 
     drawRect(
-        320, 145, 55, 63,
+        320, 145, 55, 65,
         0xFF302B40
     );
 
     drawRect(
-        400, 175, 30, 33,
+        400, 175, 30, 35,
         0xFF302B40
     );
 }
+
+/* ---------------------------------------------------------
+   Efeito de ataque desenhado em C
+   --------------------------------------------------------- */
 
 static void drawAttackEffect(void)
 {
     if (currentState != ATTACK)
         return;
 
+    float effectX = facing > 0
+        ? playerX + PLAYER_W - 4
+        : playerX - 22;
+
     drawRect(
-        facing > 0 ? playerX + 48 : playerX - 24,
-        playerY + 30,
+        effectX,
+        playerY + 31,
         26, 4,
         0xFF4D8DFF
     );
 
     drawRect(
-        facing > 0 ? playerX + 50 : playerX - 20,
+        effectX + (facing > 0 ? 2 : 5),
         playerY + 24,
         18, 3,
         0xFFB7D8FF
     );
 }
 
+/* ---------------------------------------------------------
+   Efeito magico desenhado em C
+   --------------------------------------------------------- */
+
 static void drawMagicEffect(void)
 {
     if (currentState != MAGIC)
         return;
 
+    float effectX = facing > 0
+        ? playerX + PLAYER_W - 3
+        : playerX - 17;
+
     drawRect(
-        facing > 0 ? playerX + 57 : playerX - 18,
+        effectX,
         playerY + 25,
         15, 15,
         0xFFD7AAFF
     );
 
     drawRect(
-        facing > 0 ? playerX + 61 : playerX - 14,
+        effectX + 4,
         playerY + 29,
         7, 7,
         0xFF65BFFF
@@ -780,7 +778,7 @@ static void drawMagicEffect(void)
 }
 
 /* ---------------------------------------------------------
-   Atualizacao do jogador
+   Atualizacao do jogador e animacoes
    --------------------------------------------------------- */
 
 static void updatePlayer(
@@ -791,6 +789,7 @@ static void updatePlayer(
     int running =
         (buttons & PSP_CTRL_RTRIGGER) != 0;
 
+    /* Movimento horizontal */
     if (buttons & PSP_CTRL_LEFT) {
         playerX -= running ? RUN_SPEED : WALK_SPEED;
         facing = -1;
@@ -803,6 +802,7 @@ static void updatePlayer(
         moving = 1;
     }
 
+    /* Salto duplo */
     if ((buttons & PSP_CTRL_CROSS) &&
         !(previousButtons & PSP_CTRL_CROSS) &&
         jumpCount < 2) {
@@ -813,12 +813,14 @@ static void updatePlayer(
         animationTime = 0.0f;
     }
 
+    /* Ataque */
     if ((buttons & PSP_CTRL_SQUARE) &&
         !(previousButtons & PSP_CTRL_SQUARE)) {
         currentState = ATTACK;
         attackTime = 0.24f;
     }
 
+    /* Magia */
     if ((buttons & PSP_CTRL_CIRCLE) &&
         !(previousButtons & PSP_CTRL_CIRCLE) &&
         magicUnlocked) {
@@ -826,6 +828,7 @@ static void updatePlayer(
         magicTime = 0.35f;
     }
 
+    /* Fisica vertical */
     if (!grounded) {
         velocityY += GRAVITY;
         playerY += velocityY;
@@ -835,43 +838,68 @@ static void updatePlayer(
             velocityY = 0.0f;
             grounded = 1;
             jumpCount = 0;
+
             currentState = LAND;
+            landTime = 0.12f;
             animationTime = 0.0f;
         }
     }
 
+    /* Temporizadores das animacoes especiais */
     if (attackTime > 0.0f) {
         attackTime -= dt;
 
         if (attackTime < 0.0f)
             attackTime = 0.0f;
+    }
 
-        currentState = ATTACK;
-    } else if (magicTime > 0.0f) {
+    if (magicTime > 0.0f) {
         magicTime -= dt;
 
         if (magicTime < 0.0f)
             magicTime = 0.0f;
+    }
 
+    if (hurtTime > 0.0f) {
+        hurtTime -= dt;
+
+        if (hurtTime < 0.0f)
+            hurtTime = 0.0f;
+    }
+
+    if (landTime > 0.0f) {
+        landTime -= dt;
+
+        if (landTime < 0.0f)
+            landTime = 0.0f;
+    }
+
+    /* Prioridade dos estados */
+    if (hurtTime > 0.0f) {
+        currentState = HURT;
+    } else if (attackTime > 0.0f) {
+        currentState = ATTACK;
+    } else if (magicTime > 0.0f) {
         currentState = MAGIC;
     } else if (!grounded) {
         currentState =
             velocityY < 0.0f ? JUMP : FALL;
-    } else if (currentState == LAND &&
-               animationTime < 0.12f) {
-        /* Mantem a pose de aterrissagem. */
+    } else if (landTime > 0.0f) {
+        currentState = LAND;
     } else {
         currentState =
             moving ? (running ? RUN : WALK) : IDLE;
     }
 
+    /* Avanco dos quadros de animacao */
     animationTime += dt;
 
     if (animationTime >= 0.12f) {
-        animationTime = 0.0f;
+        animationTime -= 0.12f;
         animationFrame++;
     }
 
+    /* Limites horizontais */
     if (playerX < 0.0f)
         playerX = 0.0f;
 
@@ -893,9 +921,13 @@ int main(void)
 
     initializeGraphics();
 
-    /* Tenta carregar os 16 sprites. */
-    for (int i = 0; i < SPRITE_COUNT; i++)
-        loadSprite(i);
+    int loadedCount = 0;
+
+    /* Carrega os 16 PNGs */
+    for (int i = 0; i < SPRITE_COUNT; i++) {
+        if (loadSprite(i))
+            loadedCount++;
+    }
 
     SceCtrlData pad;
 
@@ -905,6 +937,7 @@ int main(void)
         unsigned int buttons = pad.Buttons;
         const float deltaTime = 1.0f / 60.0f;
 
+        /* Pausa */
         if ((buttons & PSP_CTRL_START) &&
             !(previousButtons & PSP_CTRL_START)) {
             paused = !paused;
@@ -917,6 +950,7 @@ int main(void)
 
         drawCave();
 
+        /* Sprite selecionado pelo estado atual */
         drawTexture(
             &sprites[chooseSprite()],
             playerX,
@@ -929,15 +963,34 @@ int main(void)
         drawAttackEffect();
         drawMagicEffect();
 
+        /* Painel de pausa */
         if (paused) {
             drawRect(
-                140, 95, 200, 70,
+                120, 90, 240, 80,
                 0xEE090812
             );
 
             drawRect(
-                165, 125, 150, 4,
+                155, 120, 170, 4,
                 0xFFD9D2FF
+            );
+
+            drawRect(
+                175, 140, 130, 3,
+                0xFF65BFFF
+            );
+        }
+
+        /*
+         * Indicador visual de carregamento:
+         * cada quadrado representa sprites carregados.
+         */
+        for (int i = 0; i < loadedCount; i++) {
+            drawRect(
+                8 + i * 7,
+                8,
+                4, 4,
+                0xFF65BFFF
             );
         }
 
@@ -945,7 +998,7 @@ int main(void)
         previousButtons = buttons;
     }
 
-    /* O loop nao termina normalmente. */
+    /* Encerramento de seguranca */
     sceGuTerm();
 
     for (int i = 0; i < SPRITE_COUNT; i++)
