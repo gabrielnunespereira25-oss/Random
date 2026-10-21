@@ -1,9 +1,7 @@
 
 #include "character.h"
-#include <pspctrl.h>
 
 #define SCREEN_W 480
-#define SCREEN_H 272
 #define GROUND_Y 220.0f
 
 #define SPEED_WALK 2.0f
@@ -11,42 +9,53 @@
 #define JUMP_POWER -7.5f
 #define GRAVITY 0.30f
 
-static int pressed(Character *c, unsigned int buttons,
-                   unsigned int key)
+static int pressed(
+    Character *c,
+    unsigned int buttons,
+    unsigned int key
+)
 {
-    return (buttons & key) && !(c->previous_buttons & key);
+    return (buttons & key) &&
+           !(c->previous_buttons & key);
 }
 
 void character_init(Character *c)
 {
     c->x = 40.0f;
     c->y = GROUND_Y;
-    c->vx = 0;
-    c->vy = 0;
+
+    c->vx = 0.0f;
+    c->vy = 0.0f;
+
     c->grounded = 1;
     c->jumps = 0;
     c->frame = 0;
     c->timer = 0;
     c->action_timer = 0;
     c->paused = 0;
+
     c->anim = ANIM_IDLE;
     c->previous_buttons = 0;
 }
 
-void character_update(Character *c, unsigned int buttons)
+void character_update(
+    Character *c,
+    unsigned int buttons
+)
 {
-    if (pressed(c, buttons, PSP_CTRL_START))
+    if (pressed(c, buttons, PSP_CTRL_START)) {
         c->paused = !c->paused;
+    }
 
     if (c->paused) {
         c->previous_buttons = buttons;
         return;
     }
 
-    if (c->action_timer > 0)
+    if (c->action_timer > 0) {
         c->action_timer--;
+    }
 
-    /* Ações especiais */
     if (pressed(c, buttons, PSP_CTRL_SQUARE)) {
         c->anim = ANIM_ATTACK;
         c->action_timer = 20;
@@ -66,64 +75,71 @@ void character_update(Character *c, unsigned int buttons)
         c->frame = 0;
     }
 
-    /* Movimento horizontal */
-    c->vx = 0;
+    c->vx = 0.0f;
 
-    if (buttons & PSP_CTRL_LEFT)
-        c->vx = -((buttons & PSP_CTRL_RTRIGGER)
-                  ? SPEED_RUN : SPEED_WALK);
+    if (buttons & PSP_CTRL_LEFT) {
+        c->vx = (buttons & PSP_CTRL_RTRIGGER)
+            ? -SPEED_RUN
+            : -SPEED_WALK;
+    }
 
-    if (buttons & PSP_CTRL_RIGHT)
-        c->vx = ((buttons & PSP_CTRL_RTRIGGER)
-                 ? SPEED_RUN : SPEED_WALK);
+    if (buttons & PSP_CTRL_RIGHT) {
+        c->vx = (buttons & PSP_CTRL_RTRIGGER)
+            ? SPEED_RUN
+            : SPEED_WALK;
+    }
 
     c->x += c->vx;
 
-    if (c->x < 0) c->x = 0;
-    if (c->x > SCREEN_W - 32)
-        c->x = SCREEN_W - 32;
+    if (c->x < 0.0f) {
+        c->x = 0.0f;
+    }
 
-    /* Gravidade e aterrissagem */
+    if (c->x > SCREEN_W - 32) {
+        c->x = SCREEN_W - 32;
+    }
+
     if (!c->grounded) {
         c->vy += GRAVITY;
         c->y += c->vy;
 
         if (c->y >= GROUND_Y) {
             c->y = GROUND_Y;
-            c->vy = 0;
+            c->vy = 0.0f;
             c->grounded = 1;
             c->jumps = 0;
+
             c->anim = ANIM_LANDING;
             c->action_timer = 6;
             c->frame = 0;
-        } else if (c->vy > 0) {
+        }
+        else if (c->vy > 0.0f) {
             c->anim = ANIM_FALL;
         }
     }
 
-    /* Prioridade das animações */
     if (c->action_timer > 0 &&
         (c->anim == ANIM_ATTACK ||
          c->anim == ANIM_MAGIC ||
          c->anim == ANIM_LANDING)) {
-        /* Mantém a animação da ação */
+        /* Mantem a animacao temporaria. */
     }
     else if (!c->grounded) {
-        if (c->vy <= 0)
-            c->anim = ANIM_JUMP;
-        else
-            c->anim = ANIM_FALL;
+        c->anim = (c->vy <= 0.0f)
+            ? ANIM_JUMP
+            : ANIM_FALL;
     }
-    else if (c->vx != 0) {
+    else if (c->vx != 0.0f) {
         c->anim = (buttons & PSP_CTRL_RTRIGGER)
-                  ? ANIM_RUN : ANIM_WALK;
+            ? ANIM_RUN
+            : ANIM_WALK;
     }
     else {
         c->anim = ANIM_IDLE;
     }
 
-    /* Velocidade da animação */
     c->timer++;
+
     if (c->timer >= 8) {
         c->timer = 0;
         c->frame++;
@@ -178,20 +194,22 @@ const char *character_get_sprite(Character *c)
             return "assets/sprites/fall.png";
 
         case ANIM_LANDING:
-            return "assets/sprites/landing.png";
+            return idle[0];
 
         case ANIM_ATTACK:
-            if (c->action_timer > 0)
+            if (c->action_timer > 0) {
                 return attack[(c->frame / 2) % 2];
-            break;
+            }
+            return idle[c->frame % 2];
 
         case ANIM_MAGIC:
-            if (c->action_timer > 0)
+            if (c->action_timer > 0) {
                 return "assets/sprites/magic.png";
-            break;
+            }
+            return idle[c->frame % 2];
 
         case ANIM_HURT:
-            return "assets/sprites/hurt.png";
+            return idle[0];
     }
 
     return idle[c->frame % 2];
