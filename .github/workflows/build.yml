@@ -1,13 +1,14 @@
 name: Build RANDOM PSP
 
-'on':
-workflow_dispatch:
-push:
-paths:
-- "src/"
-- "assets/"
-- "Makefile"
-- ".github/workflows/build.yml"
+on:
+  workflow_dispatch:
+
+  push:
+    paths:
+      - "src/**"
+      - "assets/**"
+      - "Makefile"
+      - ".github/workflows/build.yml"
 
 jobs:
 build:
