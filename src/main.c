@@ -52,7 +52,6 @@ int main(void)
         }
 
         graphics_end_frame();
-        sceDisplayWaitVblankStart();
     }
 
     graphics_shutdown();
