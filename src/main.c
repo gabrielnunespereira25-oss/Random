@@ -2,8 +2,10 @@
 #include <pspdisplay.h>
 #include <pspctrl.h>
 #include <pspgu.h>
+#include <pspgum.h>
 #include <pspdebug.h>
 #include <png.h>
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -16,25 +18,7 @@ PSP_MAIN_THREAD_ATTR(THREAD_ATTR_USER);
 
 #define SCREEN_W 480
 #define SCREEN_H 272
-#define BUF_W 512
 #define MENU_COUNT 3
-
-typedef enum {
-    STATE_MENU,
-    STATE_GAME,
-    STATE_PAUSE,
-    STATE_CONTROLS
-} GameState;
-
-typedef struct {
-    unsigned int color;
-    short x, y, z;
-} Vertex;
-
-typedef struct {
-    unsigned short u, v;
-    short x, y, z;
-} TexVertex;
 
 typedef struct {
     unsigned int *pixels;
@@ -44,252 +28,337 @@ typedef struct {
     int tex_height;
 } Sprite;
 
-static unsigned int __attribute__((aligned(16))) gu_list[262144];
+typedef struct {
+    unsigned short u, v;
+    short x, y, z;
+} TexVertex;
 
-static const char *menu[MENU_COUNT] = {
+static Sprite player_sprite;
+static char loaded_path[256] = "";
+static int sprite_load_error = 0;
+
+static Character player;
+
+static int menu_selection = 0;
+static int game_state = 0;
+static int running = 1;
+
+static const char *menu_items[MENU_COUNT] = {
     "JOGAR",
     "CONTROLES",
     "SAIR"
 };
 
-static int selected = 0;
-static int running = 1;
-static GameState state = STATE_MENU;
-static Character player;
+static unsigned int __attribute__((aligned(16))) list[262144];
 
-static Sprite current_sprite = { NULL, 0, 0, 0, 0 };
-static char loaded_path[256] = "";
-static char error_path[256] = "";
-static int png_error = 0;
+/* -------------------------------------------------- */
+/* PNG helpers                                        */
+/* -------------------------------------------------- */
 
-static int next_power_of_two(int n)
+static int next_power_of_two(int value)
 {
-    int p = 1;
+    int result = 1;
 
-    while (p < n && p < 512)
-        p <<= 1;
-
-    return p;
-}
-
-static void free_sprite(void)
-{
-    if (current_sprite.pixels)
-        free(current_sprite.pixels);
-
-    memset(&current_sprite, 0, sizeof(current_sprite));
-    loaded_path[0] = '\0';
-}
-
-static int load_png(const char *path, Sprite *out)
-{
-    FILE *fp = fopen(path, "rb");
-
-    if (!fp)
-        return 0;
-
-    png_structp png = png_create_read_struct(
-        PNG_LIBPNG_VER_STRING, NULL, NULL, NULL
-    );
-
-    if (!png) {
-        fclose(fp);
-        return 0;
+    while (result < value && result < 512) {
+        result <<= 1;
     }
 
-    png_infop info = png_create_info_struct(png);
+    return result;
+}
 
-    if (!info) {
-        png_destroy_read_struct(&png, NULL, NULL);
-        fclose(fp);
-        return 0;
+static void free_sprite(Sprite *sprite)
+{
+    if (sprite->pixels != NULL) {
+        free(sprite->pixels);
     }
 
-    unsigned char *raw = NULL;
+    memset(sprite, 0, sizeof(Sprite));
+}
+
+static int load_png(const char *filename, Sprite *sprite)
+{
+    FILE *file;
+    png_structp png_ptr;
+    png_infop info_ptr;
     png_bytep *rows = NULL;
+    png_bytep row = NULL;
+
+    int width;
+    int height;
+    int bit_depth;
+    int color_type;
+    int channels;
+    int y;
+    int x;
+
+    png_uint_32 rowbytes;
+
     unsigned int *pixels = NULL;
+    int tex_width;
+    int tex_height;
 
-    if (setjmp(png_jmpbuf(png))) {
-        free(pixels);
-        free(rows);
-        free(raw);
-        png_destroy_read_struct(&png, &info, NULL);
-        fclose(fp);
+    file = fopen(filename, "rb");
+
+    if (file == NULL) {
         return 0;
     }
 
-    png_init_io(png, fp);
-    png_read_info(png, info);
+    {
+        unsigned char signature[8];
 
-    png_uint_32 width, height;
-    int depth, color;
-
-    png_get_IHDR(
-        png, info, &width, &height,
-        &depth, &color, NULL, NULL, NULL
-    );
-
-    if (!width || !height || width > 256 || height > 256) {
-        png_destroy_read_struct(&png, &info, NULL);
-        fclose(fp);
-        return 0;
-    }
-
-    if (depth == 16)
-        png_set_strip_16(png);
-
-    if (color == PNG_COLOR_TYPE_PALETTE)
-        png_set_palette_to_rgb(png);
-
-    if (color == PNG_COLOR_TYPE_GRAY && depth < 8)
-        png_set_expand_gray_1_2_4_to_8(png);
-
-    if (png_get_valid(png, info, PNG_INFO_tRNS))
-        png_set_tRNS_to_alpha(png);
-
-    if (color == PNG_COLOR_TYPE_GRAY ||
-        color == PNG_COLOR_TYPE_GRAY_ALPHA)
-        png_set_gray_to_rgb(png);
-
-    if (!(color & PNG_COLOR_MASK_ALPHA))
-        png_set_add_alpha(png, 0xFF, PNG_FILLER_AFTER);
-
-    png_read_update_info(png, info);
-
-    size_t rowbytes = png_get_rowbytes(png, info);
-
-    raw = malloc(rowbytes * height);
-    rows = malloc(sizeof(png_bytep) * height);
-
-    if (!raw || !rows) {
-        free(raw);
-        free(rows);
-        png_destroy_read_struct(&png, &info, NULL);
-        fclose(fp);
-        return 0;
-    }
-
-    for (png_uint_32 y = 0; y < height; y++)
-        rows[y] = raw + y * rowbytes;
-
-    png_read_image(png, rows);
-
-    int tw = next_power_of_two((int)width);
-    int th = next_power_of_two((int)height);
-
-    pixels = memalign(16, tw * th * sizeof(unsigned int));
-
-    if (!pixels) {
-        free(rows);
-        free(raw);
-        png_destroy_read_struct(&png, &info, NULL);
-        fclose(fp);
-        return 0;
-    }
-
-    memset(pixels, 0, tw * th * sizeof(unsigned int));
-
-    for (png_uint_32 y = 0; y < height; y++) {
-        for (png_uint_32 x = 0; x < width; x++) {
-            unsigned char *p = rows[y] + x * 4;
-
-            /*
-             * PSP GU PSM_8888: pixel na ordem ABGR
-             * representada em memória little-endian.
-             */
-            pixels[y * tw + x] =
-                ((unsigned int)p[3] << 24) |
-                ((unsigned int)p[2] << 16) |
-                ((unsigned int)p[1] << 8) |
-                (unsigned int)p[0];
+        if (fread(signature, 1, 8, file) != 8 ||
+            png_sig_cmp(signature, 0, 8)) {
+            fclose(file);
+            return 0;
         }
     }
 
-    free(rows);
-    free(raw);
-    png_destroy_read_struct(&png, &info, NULL);
-    fclose(fp);
+    png_ptr = png_create_read_struct(
+        PNG_LIBPNG_VER_STRING, NULL, NULL, NULL
+    );
 
-    out->pixels = pixels;
-    out->width = (int)width;
-    out->height = (int)height;
-    out->tex_width = tw;
-    out->tex_height = th;
+    if (png_ptr == NULL) {
+        fclose(file);
+        return 0;
+    }
 
-    sceKernelDcacheWritebackInvalidateAll();
+    info_ptr = png_create_info_struct(png_ptr);
+
+    if (info_ptr == NULL) {
+        png_destroy_read_struct(&png_ptr, NULL, NULL);
+        fclose(file);
+        return 0;
+    }
+
+    if (setjmp(png_jmpbuf(png_ptr))) {
+        if (rows != NULL) {
+            free(rows);
+        }
+
+        if (row != NULL) {
+            free(row);
+        }
+
+        if (pixels != NULL) {
+            free(pixels);
+        }
+
+        png_destroy_read_struct(&png_ptr, &info_ptr, NULL);
+        fclose(file);
+        return 0;
+    }
+
+    png_init_io(png_ptr, file);
+    png_set_sig_bytes(png_ptr, 8);
+    png_read_info(png_ptr, info_ptr);
+
+    width = (int)png_get_image_width(png_ptr, info_ptr);
+    height = (int)png_get_image_height(png_ptr, info_ptr);
+    bit_depth = png_get_bit_depth(png_ptr, info_ptr);
+    color_type = png_get_color_type(png_ptr, info_ptr);
+
+    if (width <= 0 || height <= 0 ||
+        width > 256 || height > 256) {
+        png_destroy_read_struct(&png_ptr, &info_ptr, NULL);
+        fclose(file);
+        return 0;
+    }
+
+    if (bit_depth == 16) {
+        png_set_strip_16(png_ptr);
+    }
+
+    if (color_type == PNG_COLOR_TYPE_PALETTE) {
+        png_set_palette_to_rgb(png_ptr);
+    }
+
+    if (color_type == PNG_COLOR_TYPE_GRAY && bit_depth < 8) {
+        png_set_expand_gray_1_2_4_to_8(png_ptr);
+    }
+
+    if (png_get_valid(png_ptr, info_ptr, PNG_INFO_tRNS)) {
+        png_set_tRNS_to_alpha(png_ptr);
+    }
+
+    if (color_type == PNG_COLOR_TYPE_GRAY ||
+        color_type == PNG_COLOR_TYPE_GRAY_ALPHA) {
+        png_set_gray_to_rgb(png_ptr);
+    }
+
+    if (!(color_type & PNG_COLOR_MASK_ALPHA) &&
+        !png_get_valid(png_ptr, info_ptr, PNG_INFO_tRNS)) {
+        png_set_add_alpha(png_ptr, 0xFF, PNG_FILLER_AFTER);
+    }
+
+    png_read_update_info(png_ptr, info_ptr);
+
+    channels = png_get_channels(png_ptr, info_ptr);
+    rowbytes = png_get_rowbytes(png_ptr, info_ptr);
+
+    if (channels != 4 || rowbytes < (png_uint_32)(width * 4)) {
+        png_destroy_read_struct(&png_ptr, &info_ptr, NULL);
+        fclose(file);
+        return 0;
+    }
+
+    row = (png_bytep)malloc(rowbytes);
+
+    if (row == NULL) {
+        png_destroy_read_struct(&png_ptr, &info_ptr, NULL);
+        fclose(file);
+        return 0;
+    }
+
+    tex_width = next_power_of_two(width);
+    tex_height = next_power_of_two(height);
+
+    pixels = (unsigned int *)memalign(
+        16, tex_width * tex_height * sizeof(unsigned int)
+    );
+
+    if (pixels == NULL) {
+        free(row);
+        png_destroy_read_struct(&png_ptr, &info_ptr, NULL);
+        fclose(file);
+        return 0;
+    }
+
+    memset(pixels, 0, tex_width * tex_height * sizeof(unsigned int));
+
+    for (y = 0; y < height; y++) {
+        png_read_row(png_ptr, row, NULL);
+
+        for (x = 0; x < width; x++) {
+            unsigned char r = row[x * 4 + 0];
+            unsigned char g = row[x * 4 + 1];
+            unsigned char b = row[x * 4 + 2];
+            unsigned char a = row[x * 4 + 3];
+
+            pixels[y * tex_width + x] =
+                ((unsigned int)a << 24) |
+                ((unsigned int)b << 16) |
+                ((unsigned int)g << 8) |
+                (unsigned int)r;
+        }
+    }
+
+    png_read_end(png_ptr, info_ptr);
+
+    free(row);
+
+    png_destroy_read_struct(&png_ptr, &info_ptr, NULL);
+    fclose(file);
+
+    sceKernelDcacheWritebackInvalidateRange(
+        pixels,
+        tex_width * tex_height * sizeof(unsigned int)
+    );
+
+    sprite->pixels = pixels;
+    sprite->width = width;
+    sprite->height = height;
+    sprite->tex_width = tex_width;
+    sprite->tex_height = tex_height;
 
     return 1;
 }
 
+/* -------------------------------------------------- */
+/* Sprite loading                                     */
+/* -------------------------------------------------- */
+
 static int load_sprite_path(const char *path)
 {
-    if (!path)
-        return 0;
+    Sprite new_sprite;
 
-    if (current_sprite.pixels &&
-        strcmp(path, loaded_path) == 0)
-        return 1;
+    memset(&new_sprite, 0, sizeof(new_sprite));
 
-    free_sprite();
-
-    if (load_png(path, &current_sprite)) {
-        strncpy(loaded_path, path, sizeof(loaded_path) - 1);
-        loaded_path[sizeof(loaded_path) - 1] = '\0';
-        png_error = 0;
-        error_path[0] = '\0';
+    if (strcmp(path, loaded_path) == 0 &&
+        player_sprite.pixels != NULL) {
         return 1;
     }
 
-    png_error = 1;
-    strncpy(error_path, path, sizeof(error_path) - 1);
-    error_path[sizeof(error_path) - 1] = '\0';
+    free_sprite(&player_sprite);
+    loaded_path[0] = '\0';
 
-    return 0;
+    if (!load_png(path, &new_sprite)) {
+        sprite_load_error = 1;
+        return 0;
+    }
+
+    player_sprite = new_sprite;
+
+    strncpy(loaded_path, path, sizeof(loaded_path) - 1);
+    loaded_path[sizeof(loaded_path) - 1] = '\0';
+
+    sprite_load_error = 0;
+
+    return 1;
 }
+
+static void refresh_sprite(void)
+{
+    const char *path = character_get_sprite(&player);
+
+    if (path == NULL || path[0] == '\0') {
+        sprite_load_error = 1;
+        return;
+    }
+
+    if (strcmp(path, loaded_path) != 0) {
+        load_sprite_path(path);
+    }
+}
+
+/* -------------------------------------------------- */
+/* GU rendering                                       */
+/* -------------------------------------------------- */
 
 static void setup_gu(void)
 {
     sceGuInit();
 
-    sceGuStart(GU_DIRECT, gu_list);
+    sceGuStart(GU_DIRECT, list);
 
     sceGuDrawBuffer(
-        GU_PSM_8888, (void *)0, BUF_W
+        GU_PSM_8888,
+        (void *)0,
+        512
     );
 
     sceGuDispBuffer(
-        SCREEN_W, SCREEN_H,
-        (void *)0x88000, BUF_W
+        SCREEN_W,
+        SCREEN_H,
+        (void *)0x88000,
+        512
     );
 
-    sceGuDepthBuffer((void *)0x110000, BUF_W);
-
-    sceGuOffset(
-        2048 - SCREEN_W / 2,
-        2048 - SCREEN_H / 2
+    sceGuDepthBuffer(
+        (void *)0x110000,
+        512
     );
 
+    sceGuOffset(2048 - (SCREEN_W / 2), 2048 - (SCREEN_H / 2));
     sceGuViewport(2048, 2048, SCREEN_W, SCREEN_H);
-    sceGuScissor(0, 0, SCREEN_W, SCREEN_H);
 
+    sceGuDepthRange(65535, 0);
+    sceGuScissor(0, 0, SCREEN_W, SCREEN_H);
     sceGuEnable(GU_SCISSOR_TEST);
+
+    sceGuAlphaFunc(GU_GREATER, 0, 0xFF);
+    sceGuEnable(GU_ALPHA_TEST);
+
+    sceGuBlendFunc(
+        GU_ADD,
+        GU_SRC_ALPHA,
+        GU_ONE_MINUS_SRC_ALPHA,
+        0,
+        0
+    );
+
+    sceGuEnable(GU_BLEND);
     sceGuDisable(GU_DEPTH_TEST);
     sceGuDisable(GU_CULL_FACE);
-
-    sceGuTexMode(GU_PSM_8888, 0, 0, GU_FALSE);
-    sceGuTexFunc(GU_TFX_MODULATE, GU_TCC_RGBA);
-    sceGuTexFilter(GU_NEAREST, GU_NEAREST);
-    sceGuTexWrap(GU_CLAMP, GU_CLAMP);
-
-    sceGuEnable(GU_TEXTURE_2D);
-    sceGuEnable(GU_BLEND);
-    sceGuBlendFunc(
-        GU_ADD, GU_SRC_ALPHA,
-        GU_ONE_MINUS_SRC_ALPHA, 0, 0
-    );
-
-    sceGuClearColor(0xFF101018);
-    sceGuClear(GU_COLOR_BUFFER_BIT | GU_DEPTH_BUFFER_BIT);
 
     sceGuFinish();
     sceGuSync(0, 0);
@@ -298,11 +367,16 @@ static void setup_gu(void)
     sceGuDisplay(GU_TRUE);
 }
 
-static void begin_frame(unsigned int color)
+static void begin_frame(void)
 {
-    sceGuStart(GU_DIRECT, gu_list);
-    sceGuClearColor(color);
-    sceGuClear(GU_COLOR_BUFFER_BIT | GU_DEPTH_BUFFER_BIT);
+    sceGuStart(GU_DIRECT, list);
+
+    sceGuClearColor(0xFF202030);
+    sceGuClearDepth(0);
+    sceGuClear(
+        GU_COLOR_BUFFER_BIT |
+        GU_DEPTH_BUFFER_BIT
+    );
 }
 
 static void end_frame(void)
@@ -314,223 +388,326 @@ static void end_frame(void)
 }
 
 static void draw_rect(
-    int x, int y, int w, int h,
+    int x,
+    int y,
+    int width,
+    int height,
     unsigned int color
 )
 {
-    Vertex *v = sceGuGetMemory(2 * sizeof(Vertex));
+    typedef struct {
+        unsigned int color;
+        short x, y, z;
+    } ColorVertex;
 
-    v[0].color = color;
-    v[0].x = x;
-    v[0].y = y;
-    v[0].z = 0;
+    ColorVertex *vertices;
 
-    v[1].color = color;
-    v[1].x = x + w;
-    v[1].y = y + h;
-    v[1].z = 0;
+    vertices = (ColorVertex *)sceGuGetMemory(
+        2 * sizeof(ColorVertex)
+    );
+
+    vertices[0].color = color;
+    vertices[0].x = x;
+    vertices[0].y = y;
+    vertices[0].z = 0;
+
+    vertices[1].color = color;
+    vertices[1].x = x + width;
+    vertices[1].y = y + height;
+    vertices[1].z = 0;
 
     sceGuDisable(GU_TEXTURE_2D);
-
     sceGuDrawArray(
         GU_SPRITES,
         GU_COLOR_8888 |
         GU_VERTEX_16BIT |
         GU_TRANSFORM_2D,
-        2, NULL, v
+        2,
+        NULL,
+        vertices
     );
-
-    sceGuEnable(GU_TEXTURE_2D);
 }
 
-static void draw_sprite(Sprite *s, int x, int y)
+static void draw_sprite(int x, int y)
 {
-    if (!s->pixels)
+    TexVertex *vertices;
+
+    if (player_sprite.pixels == NULL) {
         return;
+    }
 
-    sceGuTexMode(GU_PSM_8888, 0, 0, GU_FALSE);
-
+    sceGuEnable(GU_TEXTURE_2D);
+    sceGuTexMode(GU_PSM_8888, 0, 0, 0);
     sceGuTexImage(
         0,
-        s->tex_width,
-        s->tex_height,
-        s->tex_width,
-        s->pixels
+        player_sprite.tex_width,
+        player_sprite.tex_height,
+        player_sprite.tex_width,
+        player_sprite.pixels
     );
 
-    TexVertex *v = sceGuGetMemory(2 * sizeof(TexVertex));
+    sceGuTexFunc(
+        GU_TFX_MODULATE,
+        GU_TCC_RGBA
+    );
 
-    v[0].u = 0;
-    v[0].v = 0;
-    v[0].x = x;
-    v[0].y = y;
-    v[0].z = 0;
+    sceGuTexFilter(
+        GU_LINEAR,
+        GU_LINEAR
+    );
 
-    v[1].u = s->width;
-    v[1].v = s->height;
-    v[1].x = x + s->width;
-    v[1].y = y + s->height;
-    v[1].z = 0;
+    sceGuTexWrap(
+        GU_CLAMP,
+        GU_CLAMP
+    );
+
+    sceGuEnable(GU_BLEND);
+
+    vertices = (TexVertex *)sceGuGetMemory(
+        2 * sizeof(TexVertex)
+    );
+
+    vertices[0].u = 0;
+    vertices[0].v = 0;
+    vertices[0].x = x;
+    vertices[0].y = y;
+    vertices[0].z = 0;
+
+    vertices[1].u = player_sprite.width;
+    vertices[1].v = player_sprite.height;
+    vertices[1].x = x + player_sprite.width;
+    vertices[1].y = y + player_sprite.height;
+    vertices[1].z = 0;
 
     sceGuDrawArray(
         GU_SPRITES,
         GU_TEXTURE_16BIT |
         GU_VERTEX_16BIT |
         GU_TRANSFORM_2D,
-        2, NULL, v
+        2,
+        NULL,
+        vertices
     );
+
+    sceGuDisable(GU_TEXTURE_2D);
 }
+
+/* -------------------------------------------------- */
+/* Menu and game                                      */
+/* -------------------------------------------------- */
 
 static void draw_menu(void)
 {
-    pspDebugScreenClear();
-    pspDebugScreenSetXY(2, 2);
-    pspDebugScreenSetTextColor(0xFFFFFFFF);
-    pspDebugScreenPrintf("===== RANDOM PSP =====\n\n");
+    int i;
 
-    for (int i = 0; i < MENU_COUNT; i++) {
-        pspDebugScreenSetTextColor(
-            i == selected ? 0xFF00FFFF : 0xFFFFFFFF
-        );
+    begin_frame();
 
-        pspDebugScreenPrintf(
-            "%s %s\n",
-            i == selected ? ">" : " ",
-            menu[i]
-        );
-    }
-
-    pspDebugScreenSetTextColor(0xFFFFFFFF);
-    pspDebugScreenPrintf("\nSetas: navegar\nX: selecionar\n");
-}
-
-static void draw_game(void)
-{
-    begin_frame(0xFF243044);
-
-    draw_rect(0, 230, SCREEN_W, 42, 0xFF345C38);
-
-    const char *path = character_get_sprite(&player);
-    load_sprite_path(path);
-
-    if (current_sprite.pixels) {
-        draw_sprite(
-            &current_sprite,
-            (int)player.x,
-            (int)player.y - current_sprite.height
-        );
-    } else {
-        draw_rect(
-            (int)player.x,
-            (int)player.y - 32,
-            24, 32, 0xFFFFA000
-        );
-    }
+    draw_rect(0, 0, SCREEN_W, SCREEN_H, 0xFF202030);
+    draw_rect(70, 45, 340, 180, 0xFF303048);
 
     end_frame();
 
-    if (png_error) {
-        pspDebugScreenSetXY(0, 0);
-        pspDebugScreenSetTextColor(0xFFFFFFFF);
-        pspDebugScreenPrintf(
-            "PNG NAO CARREGOU:\n%s\n",
-            error_path
-        );
-    }
-}
-
-static void draw_pause(void)
-{
-    pspDebugScreenClear();
-    pspDebugScreenSetXY(2, 2);
+    pspDebugScreenSetXY(17, 4);
     pspDebugScreenSetTextColor(0xFFFFFFFF);
-    pspDebugScreenPrintf("JOGO PAUSADO\n\n");
-    pspDebugScreenPrintf("X: continuar\n");
-    pspDebugScreenPrintf("O: voltar ao menu\n");
+    pspDebugScreenPrintf("RANDOM PSP");
+
+    for (i = 0; i < MENU_COUNT; i++) {
+        pspDebugScreenSetXY(18, 9 + i * 2);
+
+        if (i == menu_selection) {
+            pspDebugScreenSetTextColor(0xFF00FFFF);
+            pspDebugScreenPrintf("> %s", menu_items[i]);
+        } else {
+            pspDebugScreenSetTextColor(0xFFFFFFFF);
+            pspDebugScreenPrintf("  %s", menu_items[i]);
+        }
+    }
+
+    pspDebugScreenSetXY(5, 30);
+    pspDebugScreenSetTextColor(0xFFFFFFFF);
+    pspDebugScreenPrintf("Use D-Pad and X to select");
 }
 
 static void draw_controls(void)
 {
-    pspDebugScreenClear();
-    pspDebugScreenSetXY(2, 2);
+    begin_frame();
+    draw_rect(0, 0, SCREEN_W, SCREEN_H, 0xFF202030);
+    end_frame();
+
+    pspDebugScreenSetXY(5, 4);
     pspDebugScreenSetTextColor(0xFFFFFFFF);
-    pspDebugScreenPrintf("CONTROLES\n\n");
-    pspDebugScreenPrintf("Setas: mover\n");
-    pspDebugScreenPrintf("X: pular\n");
-    pspDebugScreenPrintf("Quadrado: atacar\n");
-    pspDebugScreenPrintf("Circulo: magia\n");
-    pspDebugScreenPrintf("START: pausar\n");
-    pspDebugScreenPrintf("O: voltar\n");
+    pspDebugScreenPrintf("CONTROLES");
+
+    pspDebugScreenSetXY(5, 8);
+    pspDebugScreenPrintf("D-Pad: mover");
+
+    pspDebugScreenSetXY(5, 10);
+    pspDebugScreenPrintf("X: selecionar / pular");
+
+    pspDebugScreenSetXY(5, 12);
+    pspDebugScreenPrintf("O: voltar");
+
+    pspDebugScreenSetXY(5, 16);
+    pspDebugScreenPrintf("Pressione O para voltar");
 }
 
-int main(void)
+static void draw_game(void)
 {
-    SceCtrlData pad;
-    unsigned int old_buttons = 0;
+    begin_frame();
 
-    sceCtrlSetSamplingCycle(0);
-    sceCtrlSetSamplingMode(PSP_CTRL_MODE_DIGITAL);
+    draw_rect(0, 0, SCREEN_W, SCREEN_H, 0xFF76B9E8);
+    draw_rect(0, 220, SCREEN_W, 52, 0xFF399447);
 
-    pspDebugScreenInit();
-    setup_gu();
-    character_init(&player);
+    refresh_sprite();
 
-    while (running) {
-        sceCtrlReadBufferPositive(&pad, 1);
-
-        unsigned int pressed = pad.Buttons & ~old_buttons;
-        old_buttons = pad.Buttons;
-
-        if (state == STATE_MENU) {
-            if (pressed & PSP_CTRL_UP)
-                selected = (selected + MENU_COUNT - 1) % MENU_COUNT;
-
-            if (pressed & PSP_CTRL_DOWN)
-                selected = (selected + 1) % MENU_COUNT;
-
-            if (pressed & PSP_CTRL_CROSS) {
-                if (selected == 0) {
-                    character_init(&player);
-                    free_sprite();
-                    state = STATE_GAME;
-                } else if (selected == 1) {
-                    state = STATE_CONTROLS;
-                } else {
-                    running = 0;
-                }
-            }
-
-            draw_menu();
-        } else if (state == STATE_GAME) {
-            if (pressed & PSP_CTRL_START) {
-                state = STATE_PAUSE;
-                draw_pause();
-            } else if (pressed & PSP_CTRL_CIRCLE) {
-                state = STATE_MENU;
-            } else {
-                character_update(&player, pad.Buttons);
-                draw_game();
-            }
-        } else if (state == STATE_PAUSE) {
-            if (pressed & PSP_CTRL_CROSS)
-                state = STATE_GAME;
-
-            if (pressed & PSP_CTRL_CIRCLE)
-                state = STATE_MENU;
-
-            if (state == STATE_PAUSE)
-                draw_pause();
-        } else if (state == STATE_CONTROLS) {
-            draw_controls();
-
-            if (pressed & PSP_CTRL_CIRCLE)
-                state = STATE_MENU;
-        }
-
-        sceKernelDelayThread(16000);
+    if (!sprite_load_error && player_sprite.pixels != NULL) {
+        draw_sprite((int)player.x, (int)player.y);
     }
 
-    free_sprite();
+    end_frame();
+
+    if (sprite_load_error) {
+        pspDebugScreenSetXY(1, 1);
+        pspDebugScreenSetTextColor(0xFFFFFFFF);
+        pspDebugScreenPrintf("PNG nao encontrado!");
+        pspDebugScreenSetXY(1, 2);
+        pspDebugScreenPrintf("Verifique assets/sprites/");
+    }
+}
+
+/* -------------------------------------------------- */
+/* Input                                               */
+/* -------------------------------------------------- */
+
+static void update_menu(unsigned int buttons)
+{
+    if (buttons & PSP_CTRL_UP) {
+        if (menu_selection > 0) {
+            menu_selection--;
+        }
+    }
+
+    if (buttons & PSP_CTRL_DOWN) {
+        if (menu_selection < MENU_COUNT - 1) {
+            menu_selection++;
+        }
+    }
+
+    if (buttons & PSP_CTRL_CROSS) {
+        if (menu_selection == 0) {
+            character_init(&player);
+            game_state = 1;
+        } else if (menu_selection == 1) {
+            game_state = 2;
+        } else if (menu_selection == 2) {
+            running = 0;
+        }
+    }
+}
+
+static void update_game(unsigned int buttons)
+{
+    if (buttons & PSP_CTRL_START) {
+        game_state = 3;
+        return;
+    }
+
+    if (buttons & PSP_CTRL_CIRCLE) {
+        game_state = 0;
+        return;
+    }
+
+    character_update(&player, buttons);
+}
+
+static void update_pause(unsigned int buttons)
+{
+    if (buttons & PSP_CTRL_START) {
+        game_state = 1;
+    }
+
+    if (buttons & PSP_CTRL_CIRCLE) {
+        game_state = 0;
+    }
+}
+
+/* -------------------------------------------------- */
+/* Main                                                */
+/* -------------------------------------------------- */
+
+int main(int argc, char *argv[])
+{
+    SceCtrlData pad;
+    unsigned int previous_buttons = 0;
+
+    (void)argc;
+    (void)argv;
+
+    pspDebugScreenInit();
+    sceCtrlSetSamplingCycle(0);
+    sceCtrlSetSamplingMode(PSP_CTRL_MODE_ANALOG);
+
+    character_init(&player);
+    setup_gu();
+
+    while (running) {
+        unsigned int buttons;
+        unsigned int pressed;
+
+        sceCtrlReadBufferPositive(&pad, 1);
+
+        buttons = pad.Buttons;
+        pressed = buttons & ~previous_buttons;
+        previous_buttons = buttons;
+
+        switch (game_state) {
+            case 0:
+                if (pressed & (PSP_CTRL_UP | PSP_CTRL_DOWN |
+                               PSP_CTRL_CROSS)) {
+                    update_menu(pressed);
+                }
+
+                draw_menu();
+                break;
+
+            case 1:
+                update_game(pressed);
+                draw_game();
+                break;
+
+            case 2:
+                if (pressed & PSP_CTRL_CIRCLE) {
+                    game_state = 0;
+                }
+
+                draw_controls();
+                break;
+
+            case 3:
+                update_pause(pressed);
+
+                begin_frame();
+                draw_rect(0, 0, SCREEN_W, SCREEN_H, 0xFF202030);
+                end_frame();
+
+                pspDebugScreenSetXY(15, 8);
+                pspDebugScreenSetTextColor(0xFFFFFFFF);
+                pspDebugScreenPrintf("PAUSADO");
+
+                pspDebugScreenSetXY(7, 12);
+                pspDebugScreenPrintf("START: continuar");
+
+                pspDebugScreenSetXY(7, 14);
+                pspDebugScreenPrintf("O: menu");
+
+                break;
+        }
+
+        sceDisplayWaitVblankStart();
+    }
+
+    free_sprite(&player_sprite);
+
     sceGuTerm();
     sceKernelExitGame();
 
