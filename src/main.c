@@ -544,6 +544,7 @@ static const unsigned char *glyph(char c)
     #undef G
 }
 
+
 static void drawText(
     int x, int y,
     const char *text,
@@ -551,6 +552,9 @@ static void drawText(
     unsigned int color)
 {
     int startX = x;
+
+    if (scale < 1)
+        scale = 1;
 
     while (*text) {
         char c = *text++;
@@ -564,8 +568,10 @@ static void drawText(
         const unsigned char *rows = glyph(c);
 
         for (int row = 0; row < 7; row++) {
+            unsigned char bits = rows[row];
+
             for (int col = 0; col < 5; col++) {
-                if (rows[row] & (1 << (4 - col))) {
+                if (bits & (1 << (4 - col))) {
                     drawRect(
                         (float)(x + col * scale),
                         (float)(y + row * scale),
@@ -579,6 +585,7 @@ static void drawText(
         x += 6 * scale;
     }
 }
+
 
 /* ---------------------------------------------------------
    Desenhar sprite
