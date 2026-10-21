@@ -1,40 +1,42 @@
 
 /*
- * RANDOM PSP
- * Base nova: PSPSDK + PSP GU + libpng
+ * RANDOM - PSP / PSPSDK
+ * Menu + sprites PNG + cenario de teste + pausa
  *
- * Menus:
- *   Menu inicial: Novo jogo / Sair
- *   Pausa: Continuar / Menu principal / Sair
+ * Estrutura:
+ * RANDOM/
+ *   EBOOT.PBP
+ *   assets/sprites/
+ *     idle_1.png, idle_2.png
+ *     walk_1.png, walk_2.png, walk_3.png, walk_4.png
+ *     run_1.png, run_2.png, run_3.png, run_4.png
+ *     jump_1.png, jump_2.png
+ *     fall.png, landing.png
+ *     attack_1.png, attack_2.png
+ *     hurt.png, magic.png
  *
  * Controles:
- *   Direcional       = mover
- *   X                = saltar / salto duplo
- *   R + direcional   = correr
- *   Quadrado         = atacar
- *   Circulo          = magia
- *   Start            = pausar
+ * Direcional = mover
+ * X = pular / salto duplo
+ * R + direcional = correr
+ * Quadrado = atacar
+ * Circulo = magia
+ * Start = pausar
  *
- * Os PNGs ficam em:
- *   ms0:/PSP/GAME/RANDOM/assets/sprites/
- *
- * Tambem tenta:
- *   ef0:/PSP/GAME/RANDOM/assets/sprites/
- *
- * Requer PSPSDK com libpng e zlib.
+ * Bibliotecas: PSPSDK, libpng, zlib
  */
 
 #include <pspkernel.h>
 #include <pspdisplay.h>
 #include <pspgu.h>
-#include <pspgum.h>
 #include <pspctrl.h>
+#include <pspdebug.h>
+#include <pspcache.h>
 
 #include <png.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <math.h>
 #include <malloc.h>
 #include <setjmp.h>
 
@@ -43,7 +45,7 @@ PSP_MAIN_THREAD_ATTR(THREAD_ATTR_USER);
 
 #define SCREEN_W 480
 #define SCREEN_H 272
-#define BUF_W    512
+#define BUF_W 512
 
 #define PLAYER_W 64
 #define PLAYER_H 72
@@ -52,16 +54,10 @@ PSP_MAIN_THREAD_ATTR(THREAD_ATTR_USER);
 #define GRAVITY 0.42f
 #define JUMP_VELOCITY -8.5f
 
-#define SPRITE_COUNT 16
+#define SPRITE_COUNT 18
 
 static unsigned int __attribute__((aligned(16)))
 displayList[262144];
-
-static unsigned int __attribute__((aligned(16)))
-frameBuffer[BUF_W * SCREEN_H];
-
-static unsigned int __attribute__((aligned(16)))
-depthBuffer[BUF_W * SCREEN_H];
 
 typedef struct {
     int width;
@@ -74,11 +70,34 @@ typedef struct {
 
 static Sprite sprites[SPRITE_COUNT];
 
+enum {
+    SPR_IDLE1,
+    SPR_IDLE2,
+    SPR_WALK1,
+    SPR_WALK2,
+    SPR_WALK3,
+    SPR_WALK4,
+    SPR_RUN1,
+    SPR_RUN2,
+    SPR_RUN3,
+    SPR_RUN4,
+    SPR_JUMP1,
+    SPR_JUMP2,
+    SPR_FALL,
+    SPR_LANDING,
+    SPR_ATTACK1,
+    SPR_ATTACK2,
+    SPR_HURT,
+    SPR_MAGIC
+};
+
 static const char *spriteNames[SPRITE_COUNT] = {
     "idle_1.png",
     "idle_2.png",
     "walk_1.png",
     "walk_2.png",
+    "walk_3.png",
+    "walk_4.png",
     "run_1.png",
     "run_2.png",
     "run_3.png",
@@ -94,26 +113,7 @@ static const char *spriteNames[SPRITE_COUNT] = {
 };
 
 enum {
-    SPR_IDLE1 = 0,
-    SPR_IDLE2,
-    SPR_WALK1,
-    SPR_WALK2,
-    SPR_RUN1,
-    SPR_RUN2,
-    SPR_RUN3,
-    SPR_RUN4,
-    SPR_JUMP1,
-    SPR_JUMP2,
-    SPR_FALL,
-    SPR_LANDING,
-    SPR_ATTACK1,
-    SPR_ATTACK2,
-    SPR_HURT,
-    SPR_MAGIC
-};
-
-enum {
-    SCREEN_MENU = 0,
+    SCREEN_MENU,
     SCREEN_GAME,
     SCREEN_PAUSE
 };
@@ -145,19 +145,11 @@ static int moving = 0;
 
 static int previousButtons = 0;
 static int gameRunning = 1;
+static int loadedSprites = 0;
 
 /* ---------------------------------------------------------
-   Controles
+   CONTROLES
    --------------------------------------------------------- */
-
-static int pressed(unsigned int buttons)
-{
-    SceCtrlData pad;
-    sceCtrlPeekBufferPositive(&pad, 1);
-
-    return ((pad.Buttons & buttons) != 0) &&
-           ((previousButtons & buttons) == 0);
-}
 
 static unsigned int currentButtons(void)
 {
@@ -166,8 +158,16 @@ static unsigned int currentButtons(void)
     return pad.Buttons;
 }
 
+static int pressed(unsigned int buttons)
+{
+    unsigned int now = currentButtons();
+
+    return ((now & buttons) != 0) &&
+           ((previousButtons & buttons) == 0);
+}
+
 /* ---------------------------------------------------------
-   PNG: dimensoes de textura em potencia de dois
+   PNG
    --------------------------------------------------------- */
 
 static int nextPowerOfTwo(int value)
@@ -194,14 +194,10 @@ static void freeSprite(Sprite *s)
     s->texHeight = 0;
 }
 
-/* ---------------------------------------------------------
-   Carregamento PNG com libpng
-   Converte a imagem para RGBA8888.
-   --------------------------------------------------------- */
-
 static int loadPNG(const char *path, Sprite *out)
 {
     FILE *file = fopen(path, "rb");
+
     if (!file)
         return 0;
 
@@ -229,7 +225,15 @@ static int loadPNG(const char *path, Sprite *out)
         return 0;
     }
 
+    unsigned char *raw = NULL;
+    png_bytep *rows = NULL;
+    unsigned int *texture = NULL;
+
     if (setjmp(png_jmpbuf(png))) {
+        free(raw);
+        free(rows);
+        free(texture);
+
         png_destroy_read_struct(&png, &info, NULL);
         fclose(file);
         return 0;
@@ -258,8 +262,7 @@ static int loadPNG(const char *path, Sprite *out)
     if (colorType == PNG_COLOR_TYPE_PALETTE)
         png_set_palette_to_rgb(png);
 
-    if (colorType == PNG_COLOR_TYPE_GRAY &&
-        bitDepth < 8)
+    if (colorType == PNG_COLOR_TYPE_GRAY && bitDepth < 8)
         png_set_expand_gray_1_2_4_to_8(png);
 
     if (png_get_valid(png, info, PNG_INFO_tRNS))
@@ -273,15 +276,19 @@ static int loadPNG(const char *path, Sprite *out)
         !png_get_valid(png, info, PNG_INFO_tRNS))
         png_set_add_alpha(png, 0xFF, PNG_FILLER_AFTER);
 
+    png_set_interlace_handling(png);
     png_read_update_info(png, info);
 
     int rowBytes = (int)png_get_rowbytes(png, info);
 
-    unsigned char *raw =
-        (unsigned char *)malloc((size_t)rowBytes * height);
+    if (rowBytes < (int)width * 4) {
+        png_destroy_read_struct(&png, &info, NULL);
+        fclose(file);
+        return 0;
+    }
 
-    png_bytep *rows =
-        (png_bytep *)malloc(sizeof(png_bytep) * height);
+    raw = (unsigned char *)malloc((size_t)rowBytes * height);
+    rows = (png_bytep *)malloc(sizeof(png_bytep) * height);
 
     if (!raw || !rows) {
         free(raw);
@@ -300,7 +307,7 @@ static int loadPNG(const char *path, Sprite *out)
     int tw = nextPowerOfTwo((int)width);
     int th = nextPowerOfTwo((int)height);
 
-    unsigned int *texture = (unsigned int *)memalign(
+    texture = (unsigned int *)memalign(
         16, (size_t)tw * th * sizeof(unsigned int));
 
     if (!texture) {
@@ -314,10 +321,8 @@ static int loadPNG(const char *path, Sprite *out)
     memset(texture, 0, (size_t)tw * th * sizeof(unsigned int));
 
     /*
-     * A libpng entrega RGBA.
-     * O PSP GU utiliza ABGR8888 no valor de cor.
-     * Cada pixel e convertido para a ordem de bytes
-     * esperada pelo formato GU_PSM_8888 no PSP.
+     * RGBA da libpng para bytes RGBA na memoria
+     * usados pela textura GU_PSM_8888 no PSP.
      */
     for (png_uint_32 y = 0; y < height; y++) {
         unsigned char *src = rows[y];
@@ -342,6 +347,9 @@ static int loadPNG(const char *path, Sprite *out)
     png_destroy_read_struct(&png, &info, NULL);
     fclose(file);
 
+    sceKernelDcacheWritebackInvalidateRange(
+        texture, (unsigned int)((size_t)tw * th * 4));
+
     out->width = (int)width;
     out->height = (int)height;
     out->texWidth = tw;
@@ -353,7 +361,7 @@ static int loadPNG(const char *path, Sprite *out)
 }
 
 /* ---------------------------------------------------------
-   Procurar sprites nos caminhos usados pelo PSP
+   CARREGAR SPRITES
    --------------------------------------------------------- */
 
 static int loadAllSprites(void)
@@ -385,7 +393,7 @@ static int loadAllSprites(void)
 }
 
 /* ---------------------------------------------------------
-   PSP GU
+   GRAFICOS PSP
    --------------------------------------------------------- */
 
 static void initGraphics(void)
@@ -394,25 +402,11 @@ static void initGraphics(void)
 
     sceGuStart(GU_DIRECT, displayList);
 
-    sceGuDrawBuffer(
-        GU_PSM_8888,
-        (void *)0,
-        BUF_W);
+    sceGuDrawBuffer(GU_PSM_8888, (void *)0, BUF_W);
+    sceGuDispBuffer(SCREEN_W, SCREEN_H, (void *)0x88000, BUF_W);
+    sceGuDepthBuffer((void *)0x110000, BUF_W);
 
-    sceGuDispBuffer(
-        SCREEN_W,
-        SCREEN_H,
-        (void *)0x88000,
-        BUF_W);
-
-    sceGuDepthBuffer(
-        (void *)0x110000,
-        BUF_W);
-
-    sceGuOffset(
-        2048 - SCREEN_W / 2,
-        2048 - SCREEN_H / 2);
-
+    sceGuOffset(2048 - SCREEN_W / 2, 2048 - SCREEN_H / 2);
     sceGuViewport(2048, 2048, SCREEN_W, SCREEN_H);
     sceGuScissor(0, 0, SCREEN_W, SCREEN_H);
     sceGuEnable(GU_SCISSOR_TEST);
@@ -421,9 +415,7 @@ static void initGraphics(void)
     sceGuDisable(GU_CULL_FACE);
     sceGuDisable(GU_LIGHTING);
 
-    sceGuEnable(GU_TEXTURE_2D);
     sceGuEnable(GU_BLEND);
-
     sceGuBlendFunc(
         GU_ADD,
         GU_SRC_ALPHA,
@@ -431,16 +423,15 @@ static void initGraphics(void)
         0,
         0);
 
+    sceGuEnable(GU_TEXTURE_2D);
     sceGuTexMode(GU_PSM_8888, 0, 0, GU_FALSE);
     sceGuTexFunc(GU_TFX_MODULATE, GU_TCC_RGBA);
-    sceGuTexFilter(GU_LINEAR, GU_LINEAR);
+    sceGuTexFilter(GU_NEAREST, GU_NEAREST);
     sceGuTexWrap(GU_CLAMP, GU_CLAMP);
 
-    sceGuClearColor(0xFF15101C);
+    sceGuClearColor(0xFF100D1B);
     sceGuClearDepth(0);
-    sceGuClear(
-        GU_COLOR_BUFFER_BIT |
-        GU_DEPTH_BUFFER_BIT);
+    sceGuClear(GU_COLOR_BUFFER_BIT | GU_DEPTH_BUFFER_BIT);
 
     sceGuFinish();
     sceGuSync(0, 0);
@@ -450,7 +441,7 @@ static void initGraphics(void)
 }
 
 /* ---------------------------------------------------------
-   Desenho de retangulos
+   DESENHO 2D
    --------------------------------------------------------- */
 
 typedef struct {
@@ -462,88 +453,75 @@ static void drawRect(
     unsigned int color)
 {
     sceGuDisable(GU_TEXTURE_2D);
-
     sceGuColor(color);
 
-    Vertex *v = (Vertex *)sceGuGetMemory(
-        2 * sizeof(Vertex));
+    Vertex *v = (Vertex *)sceGuGetMemory(2 * sizeof(Vertex));
 
     v[0].x = x;
     v[0].y = y;
-    v[0].z = 0;
+    v[0].z = 0.0f;
 
     v[1].x = x + w;
     v[1].y = y + h;
-    v[1].z = 0;
+    v[1].z = 0.0f;
 
     sceGuDrawArray(
         GU_SPRITES,
-        GU_VERTEX_32BITF |
-        GU_TRANSFORM_2D,
+        GU_VERTEX_32BITF | GU_TRANSFORM_2D,
         2, NULL, v);
 
     sceGuEnable(GU_TEXTURE_2D);
 }
 
 /* ---------------------------------------------------------
-   Fonte bitmap 5x7 para menu e HUD
+   FONTE BITMAP ESTATICA 5x7
+   Indices: A-Z, 0-9, :, -, ., >, espaco
    --------------------------------------------------------- */
+
+static const unsigned char font5x7[41][7] = {
+    {14,17,17,31,17,17,17}, {30,17,17,30,17,17,30},
+    {14,17,16,16,16,17,14}, {30,17,17,17,17,17,30},
+    {31,16,16,30,16,16,31}, {31,16,16,30,16,16,16},
+    {14,17,16,23,17,17,15}, {17,17,17,31,17,17,17},
+    {14,4,4,4,4,4,14},      {7,2,2,2,18,18,12},
+    {17,18,20,24,20,18,17}, {16,16,16,16,16,16,31},
+    {17,27,21,21,17,17,17}, {17,25,21,19,17,17,17},
+    {14,17,17,17,17,17,14}, {30,17,17,30,16,16,16},
+    {14,17,17,17,21,18,13}, {30,17,17,30,20,18,17},
+    {15,16,16,14,1,1,30},   {31,4,4,4,4,4,4},
+    {17,17,17,17,17,17,14}, {17,17,17,17,17,10,4},
+    {17,17,17,21,21,21,10}, {17,17,10,4,10,17,17},
+    {17,17,10,4,4,4,4},     {31,1,2,4,8,16,31},
+    {14,17,19,21,25,17,14}, {4,12,4,4,4,4,14},
+    {14,17,1,2,4,8,31},     {30,1,1,14,1,1,30},
+    {2,6,10,18,31,2,2},     {31,16,16,30,1,1,30},
+    {14,16,16,30,17,17,14}, {31,1,2,4,8,8,8},
+    {14,17,17,14,17,17,14},{14,17,17,15,1,1,14},
+    {0,4,4,0,4,4,0},        {0,0,0,31,0,0,0},
+    {0,0,0,0,0,12,12},      {16,8,4,2,4,8,16},
+    {0,0,0,0,0,0,0}
+};
 
 static const unsigned char *glyph(char c)
 {
-    static const unsigned char blank[7] = {0,0,0,0,0,0,0};
+    if (c >= 'a' && c <= 'z')
+        c = (char)(c - 'a' + 'A');
 
-    #define G(a,b,c,d,e,f,g) \
-        (const unsigned char[7]){a,b,c,d,e,f,g}
+    if (c >= 'A' && c <= 'Z')
+        return font5x7[c - 'A'];
+
+    if (c >= '0' && c <= '9')
+        return font5x7[26 + c - '0'];
 
     switch (c) {
-        case 'A': return G(14,17,17,31,17,17,17);
-        case 'B': return G(30,17,17,30,17,17,30);
-        case 'C': return G(14,17,16,16,16,17,14);
-        case 'D': return G(30,17,17,17,17,17,30);
-        case 'E': return G(31,16,16,30,16,16,31);
-        case 'F': return G(31,16,16,30,16,16,16);
-        case 'G': return G(14,17,16,23,17,17,15);
-        case 'H': return G(17,17,17,31,17,17,17);
-        case 'I': return G(14,4,4,4,4,4,14);
-        case 'J': return G(7,2,2,2,18,18,12);
-        case 'K': return G(17,18,20,24,20,18,17);
-        case 'L': return G(16,16,16,16,16,16,31);
-        case 'M': return G(17,27,21,21,17,17,17);
-        case 'N': return G(17,25,21,19,17,17,17);
-        case 'O': return G(14,17,17,17,17,17,14);
-        case 'P': return G(30,17,17,30,16,16,16);
-        case 'Q': return G(14,17,17,17,21,18,13);
-        case 'R': return G(30,17,17,30,20,18,17);
-        case 'S': return G(15,16,16,14,1,1,30);
-        case 'T': return G(31,4,4,4,4,4,4);
-        case 'U': return G(17,17,17,17,17,17,14);
-        case 'V': return G(17,17,17,17,17,10,4);
-        case 'W': return G(17,17,17,21,21,21,10);
-        case 'X': return G(17,17,10,4,10,17,17);
-        case 'Y': return G(17,17,10,4,4,4,4);
-        case 'Z': return G(31,1,2,4,8,16,31);
-        case '0': return G(14,17,19,21,25,17,14);
-        case '1': return G(4,12,4,4,4,4,14);
-        case '2': return G(14,17,1,2,4,8,31);
-        case '3': return G(30,1,1,14,1,1,30);
-        case '4': return G(2,6,10,18,31,2,2);
-        case '5': return G(31,16,16,30,1,1,30);
-        case '6': return G(14,16,16,30,17,17,14);
-        case '7': return G(31,1,2,4,8,8,8);
-        case '8': return G(14,17,17,14,17,17,14);
-        case '9': return G(14,17,17,15,1,1,14);
-        case ':': return G(0,4,4,0,4,4,0);
-        case '-': return G(0,0,0,31,0,0,0);
-        case '.': return G(0,0,0,0,0,12,12);
-        case '>': return G(16,8,4,2,4,8,16);
-        case ' ': return blank;
-        default:  return blank;
+        case ':': return font5x7[36];
+        case '-': return font5x7[37];
+        case '.': return font5x7[38];
+        case '>': return font5x7[39];
+        case ' ': return font5x7[40];
+        default: return font5x7[40];
     }
-
-    #undef G
 }
-
 
 static void drawText(
     int x, int y,
@@ -586,9 +564,8 @@ static void drawText(
     }
 }
 
-
 /* ---------------------------------------------------------
-   Desenhar sprite
+   SPRITES
    --------------------------------------------------------- */
 
 typedef struct {
@@ -613,36 +590,33 @@ static void drawSprite(
 
     sceGuEnable(GU_TEXTURE_2D);
     sceGuTexMode(GU_PSM_8888, 0, 0, GU_FALSE);
+
     sceGuTexImage(
-        0,
-        s->texWidth,
-        s->texHeight,
-        s->texWidth,
-        s->pixels);
+        0, s->texWidth, s->texHeight,
+        s->texWidth, s->pixels);
 
     sceGuTexFunc(GU_TFX_MODULATE, GU_TCC_RGBA);
+    sceGuTexFilter(GU_NEAREST, GU_NEAREST);
     sceGuColor(0xFFFFFFFF);
 
+    sceGuTexSync();
+
     TextureVertex *v =
-        (TextureVertex *)sceGuGetMemory(
-            2 * sizeof(TextureVertex));
+        (TextureVertex *)sceGuGetMemory(2 * sizeof(TextureVertex));
 
-    float u0 = flip ? (float)s->width : 0.0f;
-    float u1 = flip ? 0.0f : (float)s->width;
-
-    v[0].u = u0;
-    v[0].v = 0;
+    v[0].u = flip ? (float)s->width : 0.0f;
+    v[0].v = 0.0f;
     v[0].color = 0xFFFFFFFF;
     v[0].x = x;
     v[0].y = y;
-    v[0].z = 0;
+    v[0].z = 0.0f;
 
-    v[1].u = u1;
+    v[1].u = flip ? 0.0f : (float)s->width;
     v[1].v = (float)s->height;
     v[1].color = 0xFFFFFFFF;
     v[1].x = x + w;
     v[1].y = y + h;
-    v[1].z = 0;
+    v[1].z = 0.0f;
 
     sceGuDrawArray(
         GU_SPRITES,
@@ -654,39 +628,34 @@ static void drawSprite(
 }
 
 /* ---------------------------------------------------------
-   Cenario de teste
+   CENARIO DE TESTE
    --------------------------------------------------------- */
 
 static void drawBackground(void)
 {
     drawRect(0, 0, SCREEN_W, SCREEN_H, 0xFF171321);
 
-    /* Luzes e pedras da caverna */
     drawRect(0, 0, SCREEN_W, 8, 0xFF29223A);
     drawRect(25, 48, 45, 7, 0xFF302641);
     drawRect(120, 72, 62, 8, 0xFF302641);
     drawRect(300, 40, 55, 8, 0xFF302641);
     drawRect(400, 92, 45, 7, 0xFF302641);
 
-    /* Cristais */
     drawRect(72, 126, 4, 18, 0xFFFFC6FF);
     drawRect(66, 132, 16, 5, 0xFFFF70ED);
 
     drawRect(360, 144, 4, 18, 0xFFFFC6FF);
     drawRect(354, 150, 16, 5, 0xFFFF70ED);
 
-    /* Plataformas */
     drawRect(0, 200, 110, 12, 0xFF51405B);
     drawRect(145, 184, 82, 12, 0xFF51405B);
     drawRect(270, 164, 78, 12, 0xFF51405B);
     drawRect(385, 190, 95, 12, 0xFF51405B);
 
-    /* Chao */
     drawRect(0, FLOOR_Y, SCREEN_W, SCREEN_H - FLOOR_Y,
              0xFF45374D);
     drawRect(0, FLOOR_Y, SCREEN_W, 4, 0xFF8D6F99);
 
-    /* Pequenos detalhes */
     drawRect(20, 242, 35, 3, 0xFF675273);
     drawRect(160, 252, 24, 3, 0xFF675273);
     drawRect(320, 236, 40, 3, 0xFF675273);
@@ -695,7 +664,6 @@ static void drawBackground(void)
 static void drawPlayer(void)
 {
     float screenX = playerX - cameraX;
-
     int sprite = currentSprite;
 
     if (hurtTimer > 0)
@@ -703,25 +671,29 @@ static void drawPlayer(void)
     else if (magicTimer > 0)
         sprite = SPR_MAGIC;
     else if (attackTimer > 0)
-        sprite = (attackTimer > 7) ? SPR_ATTACK1 : SPR_ATTACK2;
+        sprite = attackTimer > 7 ? SPR_ATTACK1 : SPR_ATTACK2;
     else if (!grounded)
-        sprite = (playerVY < 0)
-            ? ((playerVY < -4.0f) ? SPR_JUMP1 : SPR_JUMP2)
+        sprite = playerVY < 0
+            ? (playerVY < -4.0f ? SPR_JUMP1 : SPR_JUMP2)
             : SPR_FALL;
     else if (landingTimer > 0)
         sprite = SPR_LANDING;
 
-    drawSprite(
-        sprite,
-        screenX,
-        playerY,
-        PLAYER_W,
-        PLAYER_H,
-        !facingRight);
+    if (sprites[sprite].loaded) {
+        drawSprite(
+            sprite, screenX, playerY,
+            PLAYER_W, PLAYER_H, !facingRight);
+    } else {
+        /* Marcador visivel se o PNG do personagem falhar. */
+        drawRect(screenX + 18, playerY + 4, 28, 25, 0xFFFF80E8);
+        drawRect(screenX + 14, playerY + 30, 36, 30, 0xFF8E64D9);
+        drawRect(screenX + 12, playerY + 60, 15, 12, 0xFFFFFFFF);
+        drawRect(screenX + 37, playerY + 60, 15, 12, 0xFFFFFFFF);
+    }
 }
 
 /* ---------------------------------------------------------
-   Atualizacao do jogador
+   JOGO
    --------------------------------------------------------- */
 
 static void startGame(void)
@@ -820,17 +792,15 @@ static void updatePlayer(void)
     if (grounded && moving) {
         animationClock++;
 
-        if (animationClock >= (running ? 5 : 10)) {
+        if (animationClock >= (running ? 5 : 9)) {
             animationClock = 0;
             animationFrame++;
         }
 
         if (running)
-            currentSprite = SPR_RUN1 +
-                (animationFrame % 4);
+            currentSprite = SPR_RUN1 + animationFrame % 4;
         else
-            currentSprite = SPR_WALK1 +
-                (animationFrame % 2);
+            currentSprite = SPR_WALK1 + animationFrame % 4;
     } else if (grounded) {
         animationClock++;
 
@@ -845,7 +815,7 @@ static void updatePlayer(void)
 }
 
 /* ---------------------------------------------------------
-   Menu
+   MENU
    --------------------------------------------------------- */
 
 static void drawMenu(void)
@@ -858,24 +828,28 @@ static void drawMenu(void)
     drawText(140, 65, "RANDOM", 4, 0xFFFF80E8);
     drawText(122, 115, "PSP ADVENTURE", 1, 0xFFFFFFFF);
 
-    drawText(
-        150, 155,
+    drawText(150, 155,
         menuSelection == 0 ? "> NOVO JOGO" : "  NOVO JOGO",
-        1,
-        menuSelection == 0 ? 0xFFFF80E8 : 0xFFFFFFFF);
+        1, menuSelection == 0 ? 0xFFFF80E8 : 0xFFFFFFFF);
 
-    drawText(
-        150, 177,
+    drawText(150, 177,
         menuSelection == 1 ? "> SAIR" : "  SAIR",
-        1,
-        menuSelection == 1 ? 0xFFFF80E8 : 0xFFFFFFFF);
+        1, menuSelection == 1 ? 0xFFFF80E8 : 0xFFFFFFFF);
 
     drawText(130, 230, "DIRECIONAL - ESCOLHER", 1, 0xFFB8A9C9);
     drawText(170, 244, "X - CONFIRMAR", 1, 0xFFB8A9C9);
+
+    /* Diagnostico de sprites encontrados. */
+    drawText(10, 10, "PNG:", 1, 0xFFFFFFFF);
+
+    /* Mostra o numero usando os digitos da fonte. */
+    char countText[8];
+    snprintf(countText, sizeof(countText), "%d", loadedSprites);
+    drawText(40, 10, countText, 1, 0xFFFF80E8);
 }
 
 /* ---------------------------------------------------------
-   Pause
+   PAUSA
    --------------------------------------------------------- */
 
 static void drawPause(void)
@@ -887,29 +861,23 @@ static void drawPause(void)
 
     drawText(190, 75, "PAUSADO", 2, 0xFFFF80E8);
 
-    drawText(
-        125, 120,
+    drawText(125, 120,
         pauseSelection == 0 ? "> CONTINUAR" : "  CONTINUAR",
-        1,
-        pauseSelection == 0 ? 0xFFFF80E8 : 0xFFFFFFFF);
+        1, pauseSelection == 0 ? 0xFFFF80E8 : 0xFFFFFFFF);
 
-    drawText(
-        125, 143,
+    drawText(125, 143,
         pauseSelection == 1 ? "> MENU PRINCIPAL" : "  MENU PRINCIPAL",
-        1,
-        pauseSelection == 1 ? 0xFFFF80E8 : 0xFFFFFFFF);
+        1, pauseSelection == 1 ? 0xFFFF80E8 : 0xFFFFFFFF);
 
-    drawText(
-        125, 166,
+    drawText(125, 166,
         pauseSelection == 2 ? "> SAIR" : "  SAIR",
-        1,
-        pauseSelection == 2 ? 0xFFFF80E8 : 0xFFFFFFFF);
+        1, pauseSelection == 2 ? 0xFFFF80E8 : 0xFFFFFFFF);
 
     drawText(140, 192, "X - CONFIRMAR", 1, 0xFFB8A9C9);
 }
 
 /* ---------------------------------------------------------
-   Renderizacao
+   RENDERIZACAO
    --------------------------------------------------------- */
 
 static void render(void)
@@ -917,9 +885,7 @@ static void render(void)
     sceGuStart(GU_DIRECT, displayList);
 
     sceGuClearColor(0xFF100D1B);
-    sceGuClear(
-        GU_COLOR_BUFFER_BIT |
-        GU_DEPTH_BUFFER_BIT);
+    sceGuClear(GU_COLOR_BUFFER_BIT | GU_DEPTH_BUFFER_BIT);
 
     if (screenState == SCREEN_MENU) {
         drawMenu();
@@ -927,7 +893,7 @@ static void render(void)
         drawBackground();
         drawPlayer();
 
-        drawRect(8, 8, 150, 22, 0xC0100D1B);
+        drawRect(8, 8, 180, 22, 0xC0100D1B);
         drawText(16, 15, "RANDOM - TESTE", 1, 0xFFFFFFFF);
 
         if (screenState == SCREEN_PAUSE)
@@ -942,7 +908,7 @@ static void render(void)
 }
 
 /* ---------------------------------------------------------
-   Programa principal
+   MAIN
    --------------------------------------------------------- */
 
 int main(void)
@@ -952,31 +918,25 @@ int main(void)
 
     initGraphics();
 
-    int loadedSprites = loadAllSprites();
-
-    (void)loadedSprites;
+    loadedSprites = loadAllSprites();
 
     while (gameRunning) {
         unsigned int buttons = currentButtons();
 
         if (screenState == SCREEN_MENU) {
-            if (pressed(PSP_CTRL_UP) ||
-                pressed(PSP_CTRL_DOWN)) {
+            if (pressed(PSP_CTRL_UP) || pressed(PSP_CTRL_DOWN))
                 menuSelection = 1 - menuSelection;
-            }
 
             if (pressed(PSP_CTRL_CROSS)) {
-                if (menuSelection == 0) {
+                if (menuSelection == 0)
                     startGame();
-                } else {
+                else
                     gameRunning = 0;
-                }
             }
 
             if (pressed(PSP_CTRL_START))
                 startGame();
         }
-
         else if (screenState == SCREEN_GAME) {
             if (pressed(PSP_CTRL_START)) {
                 screenState = SCREEN_PAUSE;
@@ -985,7 +945,6 @@ int main(void)
                 updatePlayer();
             }
         }
-
         else if (screenState == SCREEN_PAUSE) {
             if (pressed(PSP_CTRL_UP)) {
                 pauseSelection--;
@@ -999,18 +958,16 @@ int main(void)
                     pauseSelection = 0;
             }
 
-            if (pressed(PSP_CTRL_CIRCLE)) {
+            if (pressed(PSP_CTRL_CIRCLE))
                 screenState = SCREEN_GAME;
-            }
 
             if (pressed(PSP_CTRL_CROSS)) {
-                if (pauseSelection == 0) {
+                if (pauseSelection == 0)
                     screenState = SCREEN_GAME;
-                } else if (pauseSelection == 1) {
+                else if (pauseSelection == 1)
                     screenState = SCREEN_MENU;
-                } else {
+                else
                     gameRunning = 0;
-                }
             }
 
             if (pressed(PSP_CTRL_START))
