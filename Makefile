@@ -6,8 +6,7 @@ BUILD_PRX = 1
 PSPSDK := $(shell psp-config --pspsdk-path)
 
 INCDIR = src
-
-CFLAGS = -O2 -G0 -Wall -std=c99
+CFLAGS = -O2 -G0 -Wall -std=c99 -D_PSP_FW_VERSION=600
 CXXFLAGS = $(CFLAGS)
 ASFLAGS = $(CFLAGS)
 
