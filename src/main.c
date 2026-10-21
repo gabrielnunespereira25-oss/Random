@@ -1,40 +1,30 @@
 
 /*
- * RANDOM - PSP / PSPSDK
- * Menu, fonte bitmap, sprites PNG e pausa.
- *
- * Estrutura:
- * RANDOM/
- *   EBOOT.PBP
- *   assets/sprites/
- *     idle_1.png, idle_2.png
- *     walk_1.png, walk_2.png, walk_3.png, walk_4.png
- *     run_1.png, run_2.png, run_3.png, run_4.png
- *     jump_1.png, jump_2.png
- *     fall.png, landing.png
- *     attack_1.png, attack_2.png
- *     hurt.png, magic.png
+ * RANDOM - PSP / PPSSPP
+ * Menu, personagem PNG, animacoes, ataque, magia e pausa.
  *
  * Controles:
- * Direcional = mover
- * X = salto duplo
- * R + direcional = correr
- * Quadrado = atacar
- * Circulo = magia
- * Start = pausar
+ * Direcional: mover
+ * X: pular
+ * R + Direcional: correr
+ * Quadrado: atacar
+ * Circulo: magia
+ * Start: pausar / continuar
+ *
+ * Requer PSPSDK com libpng e zlib.
  */
 
 #include <pspkernel.h>
 #include <pspdisplay.h>
 #include <pspgu.h>
 #include <pspctrl.h>
-
+#include <pspiofilemgr.h>
 #include <png.h>
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <malloc.h>
-#include <setjmp.h>
+#include <math.h>
 
 PSP_MODULE_INFO("RANDOM", 0, 1, 0);
 PSP_MAIN_THREAD_ATTR(THREAD_ATTR_USER);
@@ -42,115 +32,194 @@ PSP_MAIN_THREAD_ATTR(THREAD_ATTR_USER);
 #define SCREEN_W 480
 #define SCREEN_H 272
 #define BUF_W 512
-
-#define PLAYER_W 64
-#define PLAYER_H 72
-
-#define FLOOR_Y 224.0f
-#define GRAVITY 0.42f
-#define JUMP_VELOCITY -8.5f
+#define BUF_H 272
 
 #define SPRITE_COUNT 18
+#define TEX_MAX 512
 
-static unsigned int __attribute__((aligned(16)))
-displayList[262144];
+#define WHITE  0xFFFFFFFF
+#define BLACK  0xFF080B14
+#define BLUE   0xFFFFB040
+#define CYAN   0xFFFFE080
+#define RED    0xFF3030E8
+#define GREEN  0xFF40E890
+#define GREY   0xFF808898
 
 typedef struct {
+    unsigned int *pixels;
     int width;
     int height;
-    int texWidth;
-    int texHeight;
-    unsigned int *pixels;
     int loaded;
 } Sprite;
 
+static const char *spriteNames[SPRITE_COUNT] = {
+    "idle_1.png",
+    "idle_2.png",
+    "walk_1.png",
+    "walk_2.png",
+    "walk_3.png",
+    "walk_4.png",
+    "run_1.png",
+    "run_2.png",
+    "run_3.png",
+    "run_4.png",
+    "jump_1.png",
+    "jump_2.png",
+    "fall.png",
+    "landing.png",
+    "attack_1.png",
+    "attack_2.png",
+    "hurt.png",
+    "magic.png"
+};
+
+enum {
+    IDLE_1, IDLE_2,
+    WALK_1, WALK_2, WALK_3, WALK_4,
+    RUN_1, RUN_2, RUN_3, RUN_4,
+    JUMP_1, JUMP_2, FALL, LANDING,
+    ATTACK_1, ATTACK_2, HURT, MAGIC
+};
+
 static Sprite sprites[SPRITE_COUNT];
 
-enum {
-    SPR_IDLE1, SPR_IDLE2,
-    SPR_WALK1, SPR_WALK2, SPR_WALK3, SPR_WALK4,
-    SPR_RUN1, SPR_RUN2, SPR_RUN3, SPR_RUN4,
-    SPR_JUMP1, SPR_JUMP2,
-    SPR_FALL, SPR_LANDING,
-    SPR_ATTACK1, SPR_ATTACK2,
-    SPR_HURT, SPR_MAGIC
-};
+static unsigned int __attribute__((aligned(16))) list[262144];
+static unsigned int __attribute__((aligned(16))) framebuffer[BUF_W * BUF_H];
 
-static const char *spriteNames[SPRITE_COUNT] = {
-    "idle_1.png", "idle_2.png",
-    "walk_1.png", "walk_2.png", "walk_3.png", "walk_4.png",
-    "run_1.png", "run_2.png", "run_3.png", "run_4.png",
-    "jump_1.png", "jump_2.png",
-    "fall.png", "landing.png",
-    "attack_1.png", "attack_2.png",
-    "hurt.png", "magic.png"
-};
+static int gameState = 0; /* 0 menu, 1 jogo, 2 pausa */
+static int menuChoice = 0;
+static int loadedCount = 0;
 
-enum {
-    SCREEN_MENU,
-    SCREEN_GAME,
-    SCREEN_PAUSE
-};
-
-static int screenState = SCREEN_MENU;
-static int menuSelection = 0;
-static int pauseSelection = 0;
-
-static float playerX = 70.0f;
-static float playerY = FLOOR_Y - PLAYER_H;
+static float playerX = 100.0f;
+static float playerY = 190.0f;
 static float playerVY = 0.0f;
 static float cameraX = 0.0f;
 
+static int facing = 1;
 static int grounded = 1;
-static int jumpsRemaining = 2;
-static int facingRight = 1;
-
-static int attackTimer = 0;
-static int magicTimer = 0;
+static int attacking = 0;
+static int magicActive = 0;
 static int hurtTimer = 0;
-static int landingTimer = 0;
 
-static int animationFrame = 0;
-static int animationClock = 0;
-static int currentSprite = SPR_IDLE1;
+static int animFrame = 0;
+static int animTimer = 0;
+static int gameFrame = 0;
+static int hp = 5;
 
-static int running = 0;
-static int moving = 0;
-static int previousButtons = 0;
-static int gameRunning = 1;
-static int loadedSprites = 0;
+static SceCtrlData pad;
+static unsigned int oldButtons = 0;
 
-/* ---------------------------------------------------------
-   CONTROLES
-   --------------------------------------------------------- */
+/* Fonte bitmap 5x7 para letras maiusculas, numeros e simbolos. */
+static const unsigned char font[][7] = {
+    {14,17,17,31,17,17,17}, /* A */
+    {30,17,17,30,17,17,30}, /* B */
+    {14,17,16,16,16,17,14}, /* C */
+    {30,17,17,17,17,17,30}, /* D */
+    {31,16,16,30,16,16,31}, /* E */
+    {31,16,16,30,16,16,16}, /* F */
+    {14,17,16,23,17,17,15}, /* G */
+    {17,17,17,31,17,17,17}, /* H */
+    {14,4,4,4,4,4,14},      /* I */
+    {7,2,2,2,18,18,12},     /* J */
+    {17,18,20,24,20,18,17}, /* K */
+    {16,16,16,16,16,16,31}, /* L */
+    {17,27,21,21,17,17,17}, /* M */
+    {17,25,21,19,17,17,17}, /* N */
+    {14,17,17,17,17,17,14}, /* O */
+    {30,17,17,30,16,16,16}, /* P */
+    {14,17,17,17,21,18,13}, /* Q */
+    {30,17,17,30,20,18,17}, /* R */
+    {15,16,16,14,1,1,30},   /* S */
+    {31,4,4,4,4,4,4},       /* T */
+    {17,17,17,17,17,17,14}, /* U */
+    {17,17,17,17,17,10,4},  /* V */
+    {17,17,17,21,21,21,10}, /* W */
+    {17,17,10,4,10,17,17},  /* X */
+    {17,17,10,4,4,4,4},     /* Y */
+    {31,1,2,4,8,16,31},      /* Z */
+    {14,17,19,21,25,17,14}, /* 0 */
+    {4,12,4,4,4,4,14},      /* 1 */
+    {14,17,1,2,4,8,31},     /* 2 */
+    {30,1,1,14,1,1,30},     /* 3 */
+    {2,6,10,18,31,2,2},     /* 4 */
+    {31,16,16,30,1,1,30},   /* 5 */
+    {14,16,16,30,17,17,14}, /* 6 */
+    {31,1,2,4,8,8,8},       /* 7 */
+    {14,17,17,14,17,17,14}, /* 8 */
+    {14,17,17,15,1,1,14},   /* 9 */
+    {0,0,0,0,0,0,0},        /* espaco */
+    {0,4,4,0,4,4,0},        /* : */
+    {0,0,0,0,0,4,8},        /* , */
+    {0,0,0,31,0,0,0},       /* - */
+    {0,0,0,0,0,12,12},      /* . */
+    {4,4,4,4,4,0,4}         /* ! */
+};
 
-static unsigned int currentButtons(void)
+static int glyphIndex(char c)
 {
-    SceCtrlData pad;
-    sceCtrlPeekBufferPositive(&pad, 1);
-    return pad.Buttons;
+    if (c >= 'a' && c <= 'z') c -= 32;
+    if (c >= 'A' && c <= 'Z') return c - 'A';
+    if (c >= '0' && c <= '9') return 26 + c - '0';
+    if (c == ' ') return 36;
+    if (c == ':') return 37;
+    if (c == ',') return 38;
+    if (c == '-') return 39;
+    if (c == '.') return 40;
+    if (c == '!') return 41;
+    return 36;
 }
 
-static int pressed(unsigned int buttons)
+static void putPixel(int x, int y, unsigned int color)
 {
-    unsigned int now = currentButtons();
-
-    return ((now & buttons) != 0) &&
-           ((previousButtons & buttons) == 0);
+    if (x < 0 || x >= SCREEN_W || y < 0 || y >= SCREEN_H)
+        return;
+    framebuffer[y * BUF_W + x] = color;
 }
 
-/* ---------------------------------------------------------
-   PNG
-   --------------------------------------------------------- */
-
-static int nextPowerOfTwo(int value)
+static void drawRect(int x, int y, int w, int h,
+                     unsigned int color)
 {
-    int result = 1;
+    int x0 = x < 0 ? 0 : x;
+    int y0 = y < 0 ? 0 : y;
+    int x1 = x + w > SCREEN_W ? SCREEN_W : x + w;
+    int y1 = y + h > SCREEN_H ? SCREEN_H : y + h;
 
-    while (result < value && result < 2048)
-        result <<= 1;
+    for (int yy = y0; yy < y1; yy++)
+        for (int xx = x0; xx < x1; xx++)
+            framebuffer[yy * BUF_W + xx] = color;
+}
 
-    return result;
+static void drawText(int x, int y, const char *text,
+                     int scale, unsigned int color)
+{
+    int startX = x;
+
+    while (*text) {
+        if (*text == '\n') {
+            x = startX;
+            y += 9 * scale;
+            text++;
+            continue;
+        }
+
+        int g = glyphIndex(*text++);
+        for (int row = 0; row < 7; row++) {
+            for (int col = 0; col < 5; col++) {
+                if (font[g][row] & (1 << (4 - col)))
+                    drawRect(x + col * scale,
+                             y + row * scale,
+                             scale, scale, color);
+            }
+        }
+        x += 6 * scale;
+    }
+}
+
+static void clearScreen(unsigned int color)
+{
+    for (int y = 0; y < SCREEN_H; y++)
+        for (int x = 0; x < BUF_W; x++)
+            framebuffer[y * BUF_W + x] = color;
 }
 
 static void freeSprite(Sprite *s)
@@ -159,82 +228,70 @@ static void freeSprite(Sprite *s)
         free(s->pixels);
         s->pixels = NULL;
     }
-
-    s->loaded = 0;
     s->width = 0;
     s->height = 0;
-    s->texWidth = 0;
-    s->texHeight = 0;
+    s->loaded = 0;
 }
 
+/* Libpng: converte PNG para RGBA 8888. */
 static int loadPNG(const char *path, Sprite *out)
 {
-    FILE *file = fopen(path, "rb");
+    FILE *fp = fopen(path, "rb");
+    if (!fp) return 0;
 
-    if (!file)
-        return 0;
-
-    unsigned char signature[8];
-
-    if (fread(signature, 1, 8, file) != 8 ||
-        png_sig_cmp(signature, 0, 8)) {
-        fclose(file);
+    unsigned char sig[8];
+    if (fread(sig, 1, 8, fp) != 8 ||
+        png_sig_cmp(sig, 0, 8)) {
+        fclose(fp);
         return 0;
     }
 
     png_structp png = png_create_read_struct(
         PNG_LIBPNG_VER_STRING, NULL, NULL, NULL);
-
     if (!png) {
-        fclose(file);
+        fclose(fp);
         return 0;
     }
 
     png_infop info = png_create_info_struct(png);
-
     if (!info) {
         png_destroy_read_struct(&png, NULL, NULL);
-        fclose(file);
+        fclose(fp);
         return 0;
     }
 
     unsigned char *raw = NULL;
     png_bytep *rows = NULL;
-    unsigned int *texture = NULL;
 
     if (setjmp(png_jmpbuf(png))) {
-        free(raw);
         free(rows);
-        free(texture);
+        free(raw);
         png_destroy_read_struct(&png, &info, NULL);
-        fclose(file);
+        fclose(fp);
         return 0;
     }
 
-    png_init_io(png, file);
+    png_init_io(png, fp);
     png_set_sig_bytes(png, 8);
     png_read_info(png, info);
 
-    png_uint_32 width = png_get_image_width(png, info);
-    png_uint_32 height = png_get_image_height(png, info);
+    png_uint_32 w, h;
+    int depth, colorType, interlace, compression, filter;
 
-    int colorType = png_get_color_type(png, info);
-    int bitDepth = png_get_bit_depth(png, info);
+    png_get_IHDR(png, info, &w, &h, &depth, &colorType,
+                 &interlace, &compression, &filter);
 
-    if (width == 0 || height == 0 ||
-        width > 1024 || height > 1024) {
-        png_destroy_read_struct(&png, &info, NULL);
-        fclose(file);
-        return 0;
+    if (w == 0 || h == 0 || w > TEX_MAX || h > TEX_MAX) {
+        png_error(png, "PNG dimensions unsupported");
     }
 
-    if (bitDepth == 16)
+    if (depth == 16)
         png_set_strip_16(png);
 
     if (colorType == PNG_COLOR_TYPE_PALETTE)
         png_set_palette_to_rgb(png);
 
-    if (colorType == PNG_COLOR_TYPE_GRAY && bitDepth < 8)
+    if (colorType == PNG_COLOR_TYPE_GRAY && depth < 8)
         png_set_expand_gray_1_2_4_to_8(png);
 
     if (png_get_valid(png, info, PNG_INFO_tRNS))
@@ -248,92 +305,58 @@ static int loadPNG(const char *path, Sprite *out)
         !png_get_valid(png, info, PNG_INFO_tRNS))
         png_set_add_alpha(png, 0xFF, PNG_FILLER_AFTER);
 
-    png_set_interlace_handling(png);
     png_read_update_info(png, info);
 
-    int rowBytes = (int)png_get_rowbytes(png, info);
+    png_size_t rowBytes = png_get_rowbytes(png, info);
+    raw = (unsigned char *)malloc(rowBytes * h);
+    rows = (png_bytep *)malloc(sizeof(png_bytep) * h);
 
-    if (rowBytes < (int)width * 4) {
-        png_destroy_read_struct(&png, &info, NULL);
-        fclose(file);
-        return 0;
-    }
+    if (!raw || !rows)
+        png_error(png, "Out of memory");
 
-    raw = (unsigned char *)malloc((size_t)rowBytes * height);
-    rows = (png_bytep *)malloc(sizeof(png_bytep) * height);
-
-    if (!raw || !rows) {
-        free(raw);
-        free(rows);
-        png_destroy_read_struct(&png, &info, NULL);
-        fclose(file);
-        return 0;
-    }
-
-    for (png_uint_32 y = 0; y < height; y++)
-        rows[y] = raw + (size_t)y * rowBytes;
+    for (png_uint_32 y = 0; y < h; y++)
+        rows[y] = raw + y * rowBytes;
 
     png_read_image(png, rows);
     png_read_end(png, NULL);
 
-    int tw = nextPowerOfTwo((int)width);
-    int th = nextPowerOfTwo((int)height);
+    unsigned int *pixels = (unsigned int *)
+        memalign(16, w * h * sizeof(unsigned int));
 
-    texture = (unsigned int *)memalign(
-        16, (size_t)tw * th * sizeof(unsigned int));
+    if (!pixels)
+        png_error(png, "Out of memory for texture");
 
-    if (!texture) {
-        free(raw);
-        free(rows);
-        png_destroy_read_struct(&png, &info, NULL);
-        fclose(file);
-        return 0;
-    }
+    for (png_uint_32 y = 0; y < h; y++) {
+        for (png_uint_32 x = 0; x < w; x++) {
+            unsigned char *p = rows[y] + x * 4;
+            unsigned int r = p[0];
+            unsigned int g = p[1];
+            unsigned int b = p[2];
+            unsigned int a = p[3];
 
-    memset(texture, 0, (size_t)tw * th * sizeof(unsigned int));
-
-    for (png_uint_32 y = 0; y < height; y++) {
-        unsigned char *src = rows[y];
-
-        for (png_uint_32 x = 0; x < width; x++) {
-            unsigned char r = src[x * 4 + 0];
-            unsigned char g = src[x * 4 + 1];
-            unsigned char b = src[x * 4 + 2];
-            unsigned char a = src[x * 4 + 3];
-
-            texture[y * tw + x] =
-                ((unsigned int)a << 24) |
-                ((unsigned int)b << 16) |
-                ((unsigned int)g << 8) |
-                (unsigned int)r;
+            pixels[y * w + x] =
+                (a << 24) | (b << 16) | (g << 8) | r;
         }
     }
 
-    free(raw);
     free(rows);
-
+    free(raw);
     png_destroy_read_struct(&png, &info, NULL);
-    fclose(file);
+    fclose(fp);
 
-    out->width = (int)width;
-    out->height = (int)height;
-    out->texWidth = tw;
-    out->texHeight = th;
-    out->pixels = texture;
+    out->pixels = pixels;
+    out->width = (int)w;
+    out->height = (int)h;
     out->loaded = 1;
-
     return 1;
 }
 
-/* ---------------------------------------------------------
-   CARREGAR SPRITES
-   --------------------------------------------------------- */
-
 static int loadAllSprites(void)
 {
-    const char *directories[] = {
+    const char *dirs[] = {
         "ms0:/PSP/GAME/RANDOM/assets/sprites/",
         "ef0:/PSP/GAME/RANDOM/assets/sprites/",
+        "./assets/sprites/",
         "assets/sprites/"
     };
 
@@ -343,9 +366,9 @@ static int loadAllSprites(void)
     for (int i = 0; i < SPRITE_COUNT; i++) {
         freeSprite(&sprites[i]);
 
-        for (int d = 0; d < 3; d++) {
+        for (int d = 0; d < 4; d++) {
             snprintf(path, sizeof(path), "%s%s",
-                     directories[d], spriteNames[i]);
+                     dirs[d], spriteNames[i]);
 
             if (loadPNG(path, &sprites[i])) {
                 total++;
@@ -357,42 +380,25 @@ static int loadAllSprites(void)
     return total;
 }
 
-/* ---------------------------------------------------------
-   GRAFICOS PSP
-   --------------------------------------------------------- */
-
 static void initGraphics(void)
 {
     sceGuInit();
-    sceGuStart(GU_DIRECT, displayList);
 
-    sceGuDrawBuffer(GU_PSM_8888, (void *)0, BUF_W);
-    sceGuDispBuffer(SCREEN_W, SCREEN_H, (void *)0x88000, BUF_W);
+    sceGuStart(GU_DIRECT, list);
+    sceGuDrawBuffer(GU_PSM_8888,
+                    (void *)0, BUF_W);
+    sceGuDispBuffer(SCREEN_W, SCREEN_H,
+                    (void *)0x88000, BUF_W);
     sceGuDepthBuffer((void *)0x110000, BUF_W);
-
-    sceGuOffset(2048 - SCREEN_W / 2, 2048 - SCREEN_H / 2);
+    sceGuOffset(2048 - SCREEN_W / 2,
+                2048 - SCREEN_H / 2);
     sceGuViewport(2048, 2048, SCREEN_W, SCREEN_H);
+    sceGuDepthRange(65535, 0);
     sceGuScissor(0, 0, SCREEN_W, SCREEN_H);
     sceGuEnable(GU_SCISSOR_TEST);
-
     sceGuDisable(GU_DEPTH_TEST);
     sceGuDisable(GU_CULL_FACE);
     sceGuDisable(GU_LIGHTING);
-
-    sceGuEnable(GU_BLEND);
-    sceGuBlendFunc(
-        GU_ADD, GU_SRC_ALPHA, GU_ONE_MINUS_SRC_ALPHA, 0, 0);
-
-    sceGuEnable(GU_TEXTURE_2D);
-    sceGuTexMode(GU_PSM_8888, 0, 0, GU_FALSE);
-    sceGuTexFunc(GU_TFX_MODULATE, GU_TCC_RGBA);
-    sceGuTexFilter(GU_NEAREST, GU_NEAREST);
-    sceGuTexWrap(GU_CLAMP, GU_CLAMP);
-
-    sceGuClearColor(0xFF100D1B);
-    sceGuClearDepth(0);
-    sceGuClear(GU_COLOR_BUFFER_BIT | GU_DEPTH_BUFFER_BIT);
-
     sceGuFinish();
     sceGuSync(0, 0);
 
@@ -400,434 +406,13 @@ static void initGraphics(void)
     sceGuDisplay(GU_TRUE);
 }
 
-/* ---------------------------------------------------------
-   RETANGULOS
-   --------------------------------------------------------- */
-
-typedef struct {
-    float x, y, z;
-} Vertex;
-
-static void drawRect(
-    float x, float y, float w, float h,
-    unsigned int color)
+static void present(void)
 {
-    sceGuDisable(GU_TEXTURE_2D);
-    sceGuColor(color);
-
-    Vertex *v = (Vertex *)sceGuGetMemory(2 * sizeof(Vertex));
-
-    v[0].x = x;
-    v[0].y = y;
-    v[0].z = 0.0f;
-
-    v[1].x = x + w;
-    v[1].y = y + h;
-    v[1].z = 0.0f;
-
-    sceGuDrawArray(
-        GU_SPRITES,
-        GU_VERTEX_32BITF | GU_TRANSFORM_2D,
-        2, NULL, v);
-
-    sceGuEnable(GU_TEXTURE_2D);
-}
-
-/* ---------------------------------------------------------
-   FONTE 5x7 ESTATICA
-   --------------------------------------------------------- */
-
-static const unsigned char font5x7[41][7] = {
-    {14,17,17,31,17,17,17}, {30,17,17,30,17,17,30},
-    {14,17,16,16,16,17,14}, {30,17,17,17,17,17,30},
-    {31,16,16,30,16,16,31}, {31,16,16,30,16,16,16},
-    {14,17,16,23,17,17,15}, {17,17,17,31,17,17,17},
-    {14,4,4,4,4,4,14},      {7,2,2,2,18,18,12},
-    {17,18,20,24,20,18,17}, {16,16,16,16,16,16,31},
-    {17,27,21,21,17,17,17}, {17,25,21,19,17,17,17},
-    {14,17,17,17,17,17,14}, {30,17,17,30,16,16,16},
-    {14,17,17,17,21,18,13}, {30,17,17,30,20,18,17},
-    {15,16,16,14,1,1,30},   {31,4,4,4,4,4,4},
-    {17,17,17,17,17,17,14}, {17,17,17,17,17,10,4},
-    {17,17,17,21,21,21,10}, {17,17,10,4,10,17,17},
-    {17,17,10,4,4,4,4},     {31,1,2,4,8,16,31},
-    {14,17,19,21,25,17,14}, {4,12,4,4,4,4,14},
-    {14,17,1,2,4,8,31},     {30,1,1,14,1,1,30},
-    {2,6,10,18,31,2,2},     {31,16,16,30,1,1,30},
-    {14,16,16,30,17,17,14}, {31,1,2,4,8,8,8},
-    {14,17,17,14,17,17,14},{14,17,17,15,1,1,14},
-    {0,4,4,0,4,4,0},        {0,0,0,31,0,0,0},
-    {0,0,0,0,0,12,12},      {16,8,4,2,4,8,16},
-    {0,0,0,0,0,0,0}
-};
-
-static const unsigned char *glyph(char c)
-{
-    if (c >= 'a' && c <= 'z')
-        c = (char)(c - 'a' + 'A');
-
-    if (c >= 'A' && c <= 'Z')
-        return font5x7[c - 'A'];
-
-    if (c >= '0' && c <= '9')
-        return font5x7[26 + c - '0'];
-
-    switch (c) {
-        case ':': return font5x7[36];
-        case '-': return font5x7[37];
-        case '.': return font5x7[38];
-        case '>': return font5x7[39];
-        case ' ': return font5x7[40];
-        default: return font5x7[40];
-    }
-}
-
-static void drawText(
-    int x, int y, const char *text,
-    int scale, unsigned int color)
-{
-    int startX = x;
-
-    if (scale < 1)
-        scale = 1;
-
-    while (*text) {
-        char c = *text++;
-
-        if (c == '\n') {
-            y += 9 * scale;
-            x = startX;
-            continue;
-        }
-
-        const unsigned char *rows = glyph(c);
-
-        for (int row = 0; row < 7; row++) {
-            unsigned char bits = rows[row];
-
-            for (int col = 0; col < 5; col++) {
-                if (bits & (1 << (4 - col))) {
-                    drawRect(
-                        (float)(x + col * scale),
-                        (float)(y + row * scale),
-                        (float)scale, (float)scale, color);
-                }
-            }
-        }
-
-        x += 6 * scale;
-    }
-}
-
-/* ---------------------------------------------------------
-   SPRITES TEXTURIZADOS
-   --------------------------------------------------------- */
-
-typedef struct {
-    float u, v;
-    unsigned int color;
-    float x, y, z;
-} TextureVertex;
-
-static void drawSprite(
-    int spriteIndex, float x, float y,
-    float w, float h, int flip)
-{
-    if (spriteIndex < 0 || spriteIndex >= SPRITE_COUNT)
-        return;
-
-    Sprite *s = &sprites[spriteIndex];
-
-    if (!s->loaded || !s->pixels)
-        return;
-
-    sceGuEnable(GU_TEXTURE_2D);
-    sceGuTexMode(GU_PSM_8888, 0, 0, GU_FALSE);
-    sceGuTexImage(0, s->texWidth, s->texHeight,
-                  s->texWidth, s->pixels);
-    sceGuTexFunc(GU_TFX_MODULATE, GU_TCC_RGBA);
-    sceGuTexFilter(GU_NEAREST, GU_NEAREST);
-    sceGuColor(0xFFFFFFFF);
-
-    TextureVertex *v =
-        (TextureVertex *)sceGuGetMemory(2 * sizeof(TextureVertex));
-
-    v[0].u = flip ? (float)s->width : 0.0f;
-    v[0].v = 0.0f;
-    v[0].color = 0xFFFFFFFF;
-    v[0].x = x;
-    v[0].y = y;
-    v[0].z = 0.0f;
-
-    v[1].u = flip ? 0.0f : (float)s->width;
-    v[1].v = (float)s->height;
-    v[1].color = 0xFFFFFFFF;
-    v[1].x = x + w;
-    v[1].y = y + h;
-    v[1].z = 0.0f;
-
-    sceGuDrawArray(
-        GU_SPRITES,
-        GU_TEXTURE_32BITF |
-        GU_COLOR_8888 |
-        GU_VERTEX_32BITF |
-        GU_TRANSFORM_2D,
-        2, NULL, v);
-}
-
-/* ---------------------------------------------------------
-   CENARIO
-   --------------------------------------------------------- */
-
-static void drawBackground(void)
-{
-    drawRect(0, 0, SCREEN_W, SCREEN_H, 0xFF171321);
-
-    drawRect(0, 0, SCREEN_W, 8, 0xFF29223A);
-    drawRect(25, 48, 45, 7, 0xFF302641);
-    drawRect(120, 72, 62, 8, 0xFF302641);
-    drawRect(300, 40, 55, 8, 0xFF302641);
-    drawRect(400, 92, 45, 7, 0xFF302641);
-
-    drawRect(72, 126, 4, 18, 0xFFFFC6FF);
-    drawRect(66, 132, 16, 5, 0xFFFF70ED);
-
-    drawRect(360, 144, 4, 18, 0xFFFFC6FF);
-    drawRect(354, 150, 16, 5, 0xFFFF70ED);
-
-    drawRect(0, 200, 110, 12, 0xFF51405B);
-    drawRect(145, 184, 82, 12, 0xFF51405B);
-    drawRect(270, 164, 78, 12, 0xFF51405B);
-    drawRect(385, 190, 95, 12, 0xFF51405B);
-
-    drawRect(0, FLOOR_Y, SCREEN_W, SCREEN_H - FLOOR_Y,
-             0xFF45374D);
-    drawRect(0, FLOOR_Y, SCREEN_W, 4, 0xFF8D6F99);
-}
-
-static void drawPlayer(void)
-{
-    float screenX = playerX - cameraX;
-    int sprite = currentSprite;
-
-    if (hurtTimer > 0)
-        sprite = SPR_HURT;
-    else if (magicTimer > 0)
-        sprite = SPR_MAGIC;
-    else if (attackTimer > 0)
-        sprite = attackTimer > 7 ? SPR_ATTACK1 : SPR_ATTACK2;
-    else if (!grounded)
-        sprite = playerVY < 0
-            ? (playerVY < -4.0f ? SPR_JUMP1 : SPR_JUMP2)
-            : SPR_FALL;
-    else if (landingTimer > 0)
-        sprite = SPR_LANDING;
-
-    if (sprites[sprite].loaded) {
-        drawSprite(sprite, screenX, playerY,
-                   PLAYER_W, PLAYER_H, !facingRight);
-    } else {
-        drawRect(screenX + 18, playerY + 4, 28, 25, 0xFFFF80E8);
-        drawRect(screenX + 14, playerY + 30, 36, 30, 0xFF8E64D9);
-        drawRect(screenX + 12, playerY + 60, 15, 12, 0xFFFFFFFF);
-        drawRect(screenX + 37, playerY + 60, 15, 12, 0xFFFFFFFF);
-    }
-}
-
-/* ---------------------------------------------------------
-   ATUALIZACAO DO JOGADOR
-   --------------------------------------------------------- */
-
-static void startGame(void)
-{
-    playerX = 70.0f;
-    playerY = FLOOR_Y - PLAYER_H;
-    playerVY = 0.0f;
-    cameraX = 0.0f;
-
-    grounded = 1;
-    jumpsRemaining = 2;
-    facingRight = 1;
-
-    attackTimer = 0;
-    magicTimer = 0;
-    hurtTimer = 0;
-    landingTimer = 0;
-
-    animationFrame = 0;
-    animationClock = 0;
-    currentSprite = SPR_IDLE1;
-
-    screenState = SCREEN_GAME;
-}
-
-static void updatePlayer(void)
-{
-    unsigned int buttons = currentButtons();
-
-    moving = 0;
-    running = 0;
-
-    if (buttons & PSP_CTRL_LEFT) {
-        playerX -= (buttons & PSP_CTRL_RTRIGGER) ? 3.8f : 2.0f;
-        facingRight = 0;
-        moving = 1;
-        running = (buttons & PSP_CTRL_RTRIGGER) != 0;
-    }
-
-    if (buttons & PSP_CTRL_RIGHT) {
-        playerX += (buttons & PSP_CTRL_RTRIGGER) ? 3.8f : 2.0f;
-        facingRight = 1;
-        moving = 1;
-        running = (buttons & PSP_CTRL_RTRIGGER) != 0;
-    }
-
-    if (playerX < 0)
-        playerX = 0;
-
-    if (pressed(PSP_CTRL_CROSS) && jumpsRemaining > 0) {
-        playerVY = JUMP_VELOCITY;
-        grounded = 0;
-        jumpsRemaining--;
-        landingTimer = 0;
-    }
-
-    if (pressed(PSP_CTRL_SQUARE))
-        attackTimer = 14;
-
-    if (pressed(PSP_CTRL_CIRCLE))
-        magicTimer = 22;
-
-    if (attackTimer > 0) attackTimer--;
-    if (magicTimer > 0) magicTimer--;
-    if (hurtTimer > 0) hurtTimer--;
-    if (landingTimer > 0) landingTimer--;
-
-    if (!grounded) {
-        playerVY += GRAVITY;
-        playerY += playerVY;
-
-        if (playerY + PLAYER_H >= FLOOR_Y) {
-            playerY = FLOOR_Y - PLAYER_H;
-            playerVY = 0.0f;
-            grounded = 1;
-            jumpsRemaining = 2;
-            landingTimer = 8;
-        }
-    }
-
-    if (playerX > 2500)
-        playerX = 2500;
-
-    cameraX = playerX - SCREEN_W * 0.4f;
-    if (cameraX < 0)
-        cameraX = 0;
-
-    if (grounded && moving) {
-        animationClock++;
-
-        if (animationClock >= (running ? 5 : 9)) {
-            animationClock = 0;
-            animationFrame++;
-        }
-
-        currentSprite = running
-            ? SPR_RUN1 + animationFrame % 4
-            : SPR_WALK1 + animationFrame % 4;
-    } else if (grounded) {
-        animationClock++;
-
-        if (animationClock >= 30) {
-            animationClock = 0;
-            animationFrame++;
-        }
-
-        currentSprite = (animationFrame % 2)
-            ? SPR_IDLE1 : SPR_IDLE2;
-    }
-}
-
-/* ---------------------------------------------------------
-   MENU
-   --------------------------------------------------------- */
-
-static void drawMenu(void)
-{
-    char countText[8];
-
-    drawRect(0, 0, SCREEN_W, SCREEN_H, 0xFF100D1B);
-    drawRect(44, 42, 392, 3, 0xFF644B86);
-    drawRect(44, 206, 392, 3, 0xFF644B86);
-
-    drawText(140, 65, "RANDOM", 4, 0xFFFF80E8);
-    drawText(122, 115, "PSP ADVENTURE", 1, 0xFFFFFFFF);
-
-    drawText(150, 155,
-        menuSelection == 0 ? "> NOVO JOGO" : "  NOVO JOGO",
-        1, menuSelection == 0 ? 0xFFFF80E8 : 0xFFFFFFFF);
-
-    drawText(150, 177,
-        menuSelection == 1 ? "> SAIR" : "  SAIR",
-        1, menuSelection == 1 ? 0xFFFF80E8 : 0xFFFFFFFF);
-
-    drawText(130, 230, "DIRECIONAL - ESCOLHER", 1, 0xFFB8A9C9);
-    drawText(170, 244, "X - CONFIRMAR", 1, 0xFFB8A9C9);
-
-    drawText(10, 10, "PNG:", 1, 0xFFFFFFFF);
-    snprintf(countText, sizeof(countText), "%d", loadedSprites);
-    drawText(40, 10, countText, 1, 0xFFFF80E8);
-}
-
-/* ---------------------------------------------------------
-   PAUSA
-   --------------------------------------------------------- */
-
-static void drawPause(void)
-{
-    drawRect(0, 0, SCREEN_W, SCREEN_H, 0xD0100D1B);
-    drawRect(90, 54, 300, 164, 0xFF292139);
-    drawRect(90, 54, 300, 4, 0xFFFF80E8);
-
-    drawText(190, 75, "PAUSADO", 2, 0xFFFF80E8);
-
-    drawText(125, 120,
-        pauseSelection == 0 ? "> CONTINUAR" : "  CONTINUAR",
-        1, pauseSelection == 0 ? 0xFFFF80E8 : 0xFFFFFFFF);
-
-    drawText(125, 143,
-        pauseSelection == 1 ? "> MENU PRINCIPAL" : "  MENU PRINCIPAL",
-        1, pauseSelection == 1 ? 0xFFFF80E8 : 0xFFFFFFFF);
-
-    drawText(125, 166,
-        pauseSelection == 2 ? "> SAIR" : "  SAIR",
-        1, pauseSelection == 2 ? 0xFFFF80E8 : 0xFFFFFFFF);
-
-    drawText(140, 192, "X - CONFIRMAR", 1, 0xFFB8A9C9);
-}
-
-/* ---------------------------------------------------------
-   RENDERIZACAO
-   --------------------------------------------------------- */
-
-static void render(void)
-{
-    sceGuStart(GU_DIRECT, displayList);
-
-    sceGuClearColor(0xFF100D1B);
-    sceGuClear(GU_COLOR_BUFFER_BIT | GU_DEPTH_BUFFER_BIT);
-
-    if (screenState == SCREEN_MENU) {
-        drawMenu();
-    } else {
-        drawBackground();
-        drawPlayer();
-
-        drawRect(8, 8, 180, 22, 0xC0100D1B);
-        drawText(16, 15, "RANDOM - TESTE", 1, 0xFFFFFFFF);
-
-        if (screenState == SCREEN_PAUSE)
-            drawPause();
-    }
+    sceGuStart(GU_DIRECT, list);
+
+    sceGuCopyImage(GU_PSM_8888, 0, 0, SCREEN_W, SCREEN_H,
+                   BUF_W, framebuffer, 0, 0,
+                   BUF_W, (void *)0);
 
     sceGuFinish();
     sceGuSync(0, 0);
@@ -835,9 +420,307 @@ static void render(void)
     sceGuSwapBuffers();
 }
 
-/* ---------------------------------------------------------
-   MAIN
-   --------------------------------------------------------- */
+/*
+ * Desenha sprite RGBA usando o framebuffer por CPU.
+ * Isso evita dependencias de alinhamento/textura GU
+ * durante a fase inicial de testes.
+ */
+static void drawSprite(int index, int x, int y,
+                       int scale, int flipX)
+{
+    if (index < 0 || index >= SPRITE_COUNT)
+        return;
+
+    Sprite *s = &sprites[index];
+    if (!s->loaded || !s->pixels)
+        return;
+
+    for (int sy = 0; sy < s->height; sy++) {
+        for (int sx = 0; sx < s->width; sx++) {
+            int srcX = flipX ? s->width - 1 - sx : sx;
+            unsigned int c = s->pixels[sy * s->width + srcX];
+            unsigned int a = (c >> 24) & 255;
+
+            if (a < 16) continue;
+
+            unsigned int r = c & 255;
+            unsigned int g = (c >> 8) & 255;
+            unsigned int b = (c >> 16) & 255;
+
+            for (int yy = 0; yy < scale; yy++) {
+                for (int xx = 0; xx < scale; xx++) {
+                    int dx = x + sx * scale + xx;
+                    int dy = y + sy * scale + yy;
+
+                    if (dx < 0 || dx >= SCREEN_W ||
+                        dy < 0 || dy >= SCREEN_H)
+                        continue;
+
+                    if (a == 255) {
+                        framebuffer[dy * BUF_W + dx] =
+                            0xFF000000 | (b << 16) |
+                            (g << 8) | r;
+                    } else {
+                        unsigned int old =
+                            framebuffer[dy * BUF_W + dx];
+
+                        unsigned int or = old & 255;
+                        unsigned int og = (old >> 8) & 255;
+                        unsigned int ob = (old >> 16) & 255;
+
+                        r = (r * a + or * (255 - a)) / 255;
+                        g = (g * a + og * (255 - a)) / 255;
+                        b = (b * a + ob * (255 - a)) / 255;
+
+                        framebuffer[dy * BUF_W + dx] =
+                            0xFF000000 | (b << 16) |
+                            (g << 8) | r;
+                    }
+                }
+            }
+        }
+    }
+}
+
+static int currentSprite(void)
+{
+    if (hurtTimer > 0) return HURT;
+    if (attacking) return (animFrame & 1) ? ATTACK_2 : ATTACK_1;
+    if (magicActive) return MAGIC;
+
+    if (!grounded) {
+        if (playerVY < 0)
+            return JUMP_1;
+        return FALL;
+    }
+
+    if (pad.Buttons & PSP_CTRL_R) {
+        int f = (gameFrame / 7) % 4;
+        return RUN_1 + f;
+    }
+
+    if (pad.Buttons & (PSP_CTRL_LEFT | PSP_CTRL_RIGHT)) {
+        int f = (gameFrame / 9) % 4;
+        return WALK_1 + f;
+    }
+
+    return ((gameFrame / 40) % 2) ? IDLE_2 : IDLE_1;
+}
+
+static void resetGame(void)
+{
+    playerX = 100.0f;
+    playerY = 190.0f;
+    playerVY = 0;
+    cameraX = 0;
+    hp = 5;
+    grounded = 1;
+    attacking = 0;
+    magicActive = 0;
+    hurtTimer = 0;
+    animFrame = 0;
+    gameFrame = 0;
+}
+
+static void updateGame(void)
+{
+    float speed = (pad.Buttons & PSP_CTRL_R) ? 3.0f : 1.7f;
+
+    if (pad.Buttons & PSP_CTRL_LEFT) {
+        playerX -= speed;
+        facing = -1;
+    }
+
+    if (pad.Buttons & PSP_CTRL_RIGHT) {
+        playerX += speed;
+        facing = 1;
+    }
+
+    if (playerX < 0) playerX = 0;
+    if (playerX > 2200) playerX = 2200;
+
+    if ((pad.Buttons & PSP_CTRL_CROSS) &&
+        !(oldButtons & PSP_CTRL_CROSS) && grounded) {
+        playerVY = -7.8f;
+        grounded = 0;
+    }
+
+    if ((pad.Buttons & PSP_CTRL_SQUARE) &&
+        !(oldButtons & PSP_CTRL_SQUARE)) {
+        attacking = 1;
+        animFrame = 0;
+    }
+
+    if ((pad.Buttons & PSP_CTRL_CIRCLE) &&
+        !(oldButtons & PSP_CTRL_CIRCLE)) {
+        magicActive = 1;
+    }
+
+    if (attacking) {
+        animTimer++;
+        if (animTimer > 8) {
+            animTimer = 0;
+            animFrame++;
+            if (animFrame >= 3) {
+                attacking = 0;
+                animFrame = 0;
+            }
+        }
+    }
+
+    if (magicActive) {
+        animTimer++;
+        if (animTimer > 16) {
+            magicActive = 0;
+            animTimer = 0;
+        }
+    }
+
+    if (hurtTimer > 0) hurtTimer--;
+
+    if (!grounded) {
+        playerVY += 0.35f;
+        playerY += playerVY;
+
+        if (playerY >= 190.0f) {
+            playerY = 190.0f;
+            playerVY = 0;
+            grounded = 1;
+        }
+    }
+
+    cameraX = playerX - 190.0f;
+    if (cameraX < 0) cameraX = 0;
+    if (cameraX > 1720) cameraX = 1720;
+
+    gameFrame++;
+}
+
+static void drawBackground(void)
+{
+    clearScreen(0xFF17101B);
+
+    /* Ceu da caverna */
+    drawRect(0, 0, SCREEN_W, 200, 0xFF21172B);
+
+    /* Cristais decorativos */
+    for (int i = 0; i < 8; i++) {
+        int x = (i * 83 - (int)cameraX / 3) % 520;
+        if (x < 0) x += 520;
+
+        drawRect(x, 38 + (i % 3) * 24, 3, 18,
+                 (i % 2) ? 0xFFCE8B42 : 0xFFFFB05A);
+        drawRect(x - 3, 44 + (i % 3) * 24, 9, 3,
+                 0xFF8C5B39);
+    }
+
+    /* Plataformas e piso */
+    drawRect(0, 222, SCREEN_W, 50, 0xFF292735);
+    drawRect(0, 222, SCREEN_W, 5, 0xFF53506A);
+
+    for (int i = 0; i < SCREEN_W; i += 32) {
+        drawRect(i, 238 + (i % 3) * 5, 12, 2,
+                 0xFF444052);
+    }
+
+    /* Plataforma elevada */
+    drawRect(300 - ((int)cameraX % 300) / 3,
+             178, 72, 8, 0xFF53506A);
+}
+
+static void drawHUD(void)
+{
+    drawText(12, 10, "RANDOM", 2, WHITE);
+    drawText(12, 33, "HP", 1, CYAN);
+
+    for (int i = 0; i < 5; i++) {
+        drawRect(34 + i * 15, 32, 11, 8,
+                 i < hp ? RED : GREY);
+    }
+
+    drawText(350, 12, "PNG:", 1, WHITE);
+
+    char status[16];
+    snprintf(status, sizeof(status), "%d/18", loadedCount);
+    drawText(386, 12, status, 1,
+             loadedCount == SPRITE_COUNT ? GREEN : RED);
+}
+
+static void drawGame(void)
+{
+    drawBackground();
+
+    int px = (int)(playerX - cameraX);
+    int py = (int)playerY;
+
+    int sprite = currentSprite();
+    if (sprites[sprite].loaded) {
+        drawSprite(sprite, px, py - sprites[sprite].height,
+                   1, facing < 0);
+    } else {
+        /* Personagem de reserva se os PNGs nao carregarem. */
+        drawRect(px + 8, py - 30, 16, 24, 0xFF4A9CFF);
+        drawRect(px + 10, py - 40, 12, 12, 0xFFD4A77B);
+        drawRect(px + 8, py - 8, 6, 8, 0xFF303050);
+        drawRect(px + 18, py - 8, 6, 8, 0xFF303050);
+    }
+
+    if (magicActive) {
+        int mx = px + (facing > 0 ? 28 : -12);
+        drawRect(mx, py - 30, 12, 12, CYAN);
+        drawRect(mx + 3, py - 34, 6, 20, BLUE);
+    }
+
+    if (attacking) {
+        int ax = px + (facing > 0 ? 28 : -18);
+        drawRect(ax, py - 28, 18, 4, WHITE);
+        drawRect(ax + 4, py - 34, 10, 3, CYAN);
+    }
+
+    drawHUD();
+}
+
+static void drawMenu(void)
+{
+    clearScreen(0xFF100D1A);
+
+    drawRect(0, 0, SCREEN_W, 190, 0xFF1C1730);
+    drawRect(0, 190, SCREEN_W, 82, 0xFF30263D);
+
+    drawText(142, 42, "RANDOM", 4, CYAN);
+    drawText(130, 80, "FORGOTTEN CAVE", 1, WHITE);
+
+    drawRect(150, 126 + menuChoice * 30, 180, 24,
+             0xFF55416D);
+
+    drawText(190, 134, "JOGAR", 2, WHITE);
+    drawText(190, 164, "SAIR", 2, WHITE);
+
+    drawText(12, 224, "PNG:", 1, WHITE);
+
+    char status[24];
+    snprintf(status, sizeof(status), "%d/18", loadedCount);
+    drawText(48, 224, status, 1,
+             loadedCount == SPRITE_COUNT ? GREEN : RED);
+
+    if (loadedCount < SPRITE_COUNT)
+        drawText(12, 242, "VERIFIQUE ASSETS/SPRITES", 1, CYAN);
+    else
+        drawText(12, 242, "SPRITES CARREGADOS", 1, GREEN);
+}
+
+static void drawPause(void)
+{
+    drawGame();
+
+    /* Painel de pausa */
+    drawRect(105, 60, 270, 145, 0xFF10101F);
+    drawRect(105, 60, 270, 3, CYAN);
+
+    drawText(194, 78, "PAUSADO", 2, WHITE);
+    drawText(143, 118, "START: CONTINUAR", 1, CYAN);
+    drawText(143, 140, "X: VOLTAR AO MENU", 1, WHITE);
+}
 
 int main(void)
 {
@@ -845,75 +728,64 @@ int main(void)
     sceCtrlSetSamplingMode(PSP_CTRL_MODE_ANALOG);
 
     initGraphics();
+    loadedCount = loadAllSprites();
 
-    loadedSprites = loadAllSprites();
+    while (1) {
+        sceCtrlReadBufferPositive(&pad, 1);
 
-    while (gameRunning) {
-        unsigned int buttons = currentButtons();
-
-        if (screenState == SCREEN_MENU) {
-            if (pressed(PSP_CTRL_UP) || pressed(PSP_CTRL_DOWN))
-                menuSelection = 1 - menuSelection;
-
-            if (pressed(PSP_CTRL_CROSS)) {
-                if (menuSelection == 0)
-                    startGame();
-                else
-                    gameRunning = 0;
+        if (gameState == 0) {
+            if ((pad.Buttons & PSP_CTRL_UP) &&
+                !(oldButtons & PSP_CTRL_UP)) {
+                menuChoice = 0;
             }
 
-            if (pressed(PSP_CTRL_START))
-                startGame();
-        }
-        else if (screenState == SCREEN_GAME) {
-            if (pressed(PSP_CTRL_START)) {
-                screenState = SCREEN_PAUSE;
-                pauseSelection = 0;
+            if ((pad.Buttons & PSP_CTRL_DOWN) &&
+                !(oldButtons & PSP_CTRL_DOWN)) {
+                menuChoice = 1;
+            }
+
+            if ((pad.Buttons & PSP_CTRL_CROSS) &&
+                !(oldButtons & PSP_CTRL_CROSS)) {
+                if (menuChoice == 0) {
+                    resetGame();
+                    gameState = 1;
+                } else {
+                    break;
+                }
+            }
+
+            drawMenu();
+        } else if (gameState == 1) {
+            if ((pad.Buttons & PSP_CTRL_START) &&
+                !(oldButtons & PSP_CTRL_START)) {
+                gameState = 2;
             } else {
-                updatePlayer();
-            }
-        }
-        else if (screenState == SCREEN_PAUSE) {
-            if (pressed(PSP_CTRL_UP)) {
-                pauseSelection--;
-                if (pauseSelection < 0)
-                    pauseSelection = 2;
+                updateGame();
             }
 
-            if (pressed(PSP_CTRL_DOWN)) {
-                pauseSelection++;
-                if (pauseSelection > 2)
-                    pauseSelection = 0;
+            drawGame();
+        } else {
+            if ((pad.Buttons & PSP_CTRL_START) &&
+                !(oldButtons & PSP_CTRL_START)) {
+                gameState = 1;
             }
 
-            if (pressed(PSP_CTRL_CIRCLE))
-                screenState = SCREEN_GAME;
-
-            if (pressed(PSP_CTRL_CROSS)) {
-                if (pauseSelection == 0)
-                    screenState = SCREEN_GAME;
-                else if (pauseSelection == 1)
-                    screenState = SCREEN_MENU;
-                else
-                    gameRunning = 0;
+            if ((pad.Buttons & PSP_CTRL_CROSS) &&
+                !(oldButtons & PSP_CTRL_CROSS)) {
+                gameState = 0;
             }
 
-            if (pressed(PSP_CTRL_START))
-                screenState = SCREEN_GAME;
+            drawPause();
         }
 
-        render();
-
-        previousButtons = buttons;
-        sceKernelDelayThread(16000);
+        present();
+        oldButtons = pad.Buttons;
     }
 
     for (int i = 0; i < SPRITE_COUNT; i++)
         freeSprite(&sprites[i]);
 
-    sceGuDisplay(GU_FALSE);
     sceGuTerm();
-
     sceKernelExitGame();
     return 0;
 }
