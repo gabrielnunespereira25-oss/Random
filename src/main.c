@@ -38,8 +38,10 @@ typedef struct {
 
 typedef struct {
     unsigned int *pixels;
-    int width, height;
-    int tex_width, tex_height;
+    int width;
+    int height;
+    int tex_width;
+    int tex_height;
 } Sprite;
 
 static unsigned int __attribute__((aligned(16))) gu_list[262144];
@@ -57,20 +59,23 @@ static Character player;
 
 static Sprite current_sprite = { NULL, 0, 0, 0, 0 };
 static char loaded_path[256] = "";
+static char error_path[256] = "";
+static int png_error = 0;
 
 static int next_power_of_two(int n)
 {
     int p = 1;
-    while (p < n && p < 1024)
+
+    while (p < n && p < 512)
         p <<= 1;
+
     return p;
 }
 
 static void free_sprite(void)
 {
-    if (current_sprite.pixels) {
+    if (current_sprite.pixels)
         free(current_sprite.pixels);
-    }
 
     memset(&current_sprite, 0, sizeof(current_sprite));
     loaded_path[0] = '\0';
@@ -79,6 +84,7 @@ static void free_sprite(void)
 static int load_png(const char *path, Sprite *out)
 {
     FILE *fp = fopen(path, "rb");
+
     if (!fp)
         return 0;
 
@@ -123,7 +129,7 @@ static int load_png(const char *path, Sprite *out)
         &depth, &color, NULL, NULL, NULL
     );
 
-    if (!width || !height || width > 512 || height > 512) {
+    if (!width || !height || width > 256 || height > 256) {
         png_destroy_read_struct(&png, &info, NULL);
         fclose(fp);
         return 0;
@@ -188,9 +194,8 @@ static int load_png(const char *path, Sprite *out)
             unsigned char *p = rows[y] + x * 4;
 
             /*
-             * GU_PSM_8888 usa o formato de cor PSP.
-             * Mantemos os canais RGBA convertidos para o
-             * formato de pixel utilizado pelo GU.
+             * PSP GU PSM_8888: pixel na ordem ABGR
+             * representada em memória little-endian.
              */
             pixels[y * tw + x] =
                 ((unsigned int)p[3] << 24) |
@@ -214,6 +219,32 @@ static int load_png(const char *path, Sprite *out)
     sceKernelDcacheWritebackInvalidateAll();
 
     return 1;
+}
+
+static int load_sprite_path(const char *path)
+{
+    if (!path)
+        return 0;
+
+    if (current_sprite.pixels &&
+        strcmp(path, loaded_path) == 0)
+        return 1;
+
+    free_sprite();
+
+    if (load_png(path, &current_sprite)) {
+        strncpy(loaded_path, path, sizeof(loaded_path) - 1);
+        loaded_path[sizeof(loaded_path) - 1] = '\0';
+        png_error = 0;
+        error_path[0] = '\0';
+        return 1;
+    }
+
+    png_error = 1;
+    strncpy(error_path, path, sizeof(error_path) - 1);
+    error_path[sizeof(error_path) - 1] = '\0';
+
+    return 0;
 }
 
 static void setup_gu(void)
@@ -314,7 +345,7 @@ static void draw_rect(
 
 static void draw_sprite(Sprite *s, int x, int y)
 {
-    if (!s->pixels || s->width <= 0 || s->height <= 0)
+    if (!s->pixels)
         return;
 
     sceGuTexMode(GU_PSM_8888, 0, 0, GU_FALSE);
@@ -350,32 +381,8 @@ static void draw_sprite(Sprite *s, int x, int y)
     );
 }
 
-static void refresh_sprite(void)
-{
-    const char *path = character_get_sprite(&player);
-
-    if (!path)
-        return;
-
-    if (current_sprite.pixels &&
-        strcmp(path, loaded_path) == 0)
-        return;
-
-    free_sprite();
-
-    if (load_png(path, &current_sprite)) {
-        strncpy(loaded_path, path, sizeof(loaded_path) - 1);
-        loaded_path[sizeof(loaded_path) - 1] = '\0';
-    }
-}
-
 static void draw_menu(void)
 {
-    /*
-     * O menu textual usa a tela de depuração.
-     * Não desenhamos GU neste estado para evitar
-     * misturar dois sistemas de renderização.
-     */
     pspDebugScreenClear();
     pspDebugScreenSetXY(2, 2);
     pspDebugScreenSetTextColor(0xFFFFFFFF);
@@ -403,7 +410,8 @@ static void draw_game(void)
 
     draw_rect(0, 230, SCREEN_W, 42, 0xFF345C38);
 
-    refresh_sprite();
+    const char *path = character_get_sprite(&player);
+    load_sprite_path(path);
 
     if (current_sprite.pixels) {
         draw_sprite(
@@ -420,6 +428,15 @@ static void draw_game(void)
     }
 
     end_frame();
+
+    if (png_error) {
+        pspDebugScreenSetXY(0, 0);
+        pspDebugScreenSetTextColor(0xFFFFFFFF);
+        pspDebugScreenPrintf(
+            "PNG NAO CARREGOU:\n%s\n",
+            error_path
+        );
+    }
 }
 
 static void draw_pause(void)
@@ -484,8 +501,7 @@ int main(void)
             }
 
             draw_menu();
-        }
-        else if (state == STATE_GAME) {
+        } else if (state == STATE_GAME) {
             if (pressed & PSP_CTRL_START) {
                 state = STATE_PAUSE;
                 draw_pause();
@@ -495,8 +511,7 @@ int main(void)
                 character_update(&player, pad.Buttons);
                 draw_game();
             }
-        }
-        else if (state == STATE_PAUSE) {
+        } else if (state == STATE_PAUSE) {
             if (pressed & PSP_CTRL_CROSS)
                 state = STATE_GAME;
 
@@ -505,8 +520,7 @@ int main(void)
 
             if (state == STATE_PAUSE)
                 draw_pause();
-        }
-        else if (state == STATE_CONTROLS) {
+        } else if (state == STATE_CONTROLS) {
             draw_controls();
 
             if (pressed & PSP_CTRL_CIRCLE)
@@ -519,5 +533,6 @@ int main(void)
     free_sprite();
     sceGuTerm();
     sceKernelExitGame();
+
     return 0;
 }
