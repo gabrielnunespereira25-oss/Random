@@ -1,3 +1,4 @@
+
 name: Build RANDOM PSP
 
 'on':
@@ -25,10 +26,26 @@ jobs:
           echo "Checking project files"
           ls -la
           ls -la src
-          test -f src/main.c
-          test -f src/graphics.h
-          test -f src/graphics.c
-          test -f Makefile
+          for file in \
+            src/main.c \
+            src/graphics.h \
+            src/graphics.c \
+            src/menu.h \
+            src/menu.c \
+            src/game.h \
+            src/game.c \
+            src/sprite.h \
+            src/sprite.c \
+            src/character.h \
+            src/character.c \
+            Makefile
+          do
+            if [ ! -f "$file" ]; then
+              echo "MISSING FILE: $file"
+              exit 1
+            fi
+          done
+          echo "All required files exist."
 
       - name: Clean
         run: make clean
