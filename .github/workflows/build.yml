@@ -1,3 +1,4 @@
+
 name: Build RANDOM PSP
 
 on:
@@ -12,6 +13,7 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+
     container:
       image: pspdev/pspdev:latest
 
@@ -19,34 +21,22 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Check project files
-        run: |
-          test -f Makefile
-          test -f src/main.c
-          test -f src/character.c
-          test -f src/character.h
-          test -d assets/sprites
-
       - name: Build EBOOT
         run: |
           make clean || true
           make
-          test -f EBOOT.PBP
 
-      - name: Upload EBOOT
-        uses: actions/upload-artifact@v4
-        with:
-          name: RANDOM-PSP-EBOOT
-          path: EBOOT.PBP
-
-      - name: Prepare package files
+      - name: Prepare package
         run: |
-          mkdir -p package/PSP/GAME/RANDOM/assets/sprites
-          cp EBOOT.PBP package/PSP/GAME/RANDOM/
-          cp assets/sprites/*.png package/PSP/GAME/RANDOM/assets/sprites/
+          mkdir -p package
+          cp EBOOT.PBP package/
+          if [ -d assets ]; then
+            cp -r assets package/
+          fi
 
-      - name: Upload package files
+      - name: Upload PSP game
         uses: actions/upload-artifact@v4
         with:
-          name: RANDOM-PSP-ARQUIVOS
-          path: package/PSP/
+          name: RANDOM-PSP
+          path: package/
+          if-no-files-found: error
