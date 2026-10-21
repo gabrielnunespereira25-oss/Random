@@ -5,57 +5,55 @@ on:
   push:
     paths:
       - "src/**"
-      - "assets/sprites/**"
+      - "assets/**"
       - "Makefile"
       - ".github/workflows/build.yml"
 
 jobs:
   build:
     runs-on: ubuntu-latest
-
     container:
       image: pspdev/pspdev:latest
 
     steps:
-      - name: Checkout repository
+      - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Verify project files
+      - name: Install ZIP
+        run: |
+          apt-get update
+          apt-get install -y zip
+
+      - name: Check project files
         run: |
           test -f Makefile
           test -f src/main.c
           test -f src/character.c
           test -f src/character.h
           test -d assets/sprites
-          echo "Project files verified."
 
-      - name: Build RANDOM
+      - name: Build EBOOT
         run: |
           make clean || true
           make
-
-      - name: Verify EBOOT
-        run: |
           test -f EBOOT.PBP
-          echo "EBOOT.PBP generated successfully."
 
-      - name: Prepare PSP folder
+      - name: Package game
         run: |
           mkdir -p package/PSP/GAME/RANDOM/assets/sprites
           cp EBOOT.PBP package/PSP/GAME/RANDOM/
-          cp assets/sprites/*.png \
-            package/PSP/GAME/RANDOM/assets/sprites/
-
-      - name: Create ZIP
-        run: |
+          cp assets/sprites/*.png package/PSP/GAME/RANDOM/assets/sprites/
           cd package
           zip -r ../RANDOM-PSP.zip PSP
 
-      - name: Upload build artifacts
+      - name: Upload EBOOT
         uses: actions/upload-artifact@v4
         with:
-          name: RANDOM-PSP
-          path: |
-            EBOOT.PBP
-            RANDOM-PSP.zip
-          if-no-files-found: error
+          name: RANDOM-PSP-EBOOT
+          path: EBOOT.PBP
+
+      - name: Upload complete game
+        uses: actions/upload-artifact@v4
+        with:
+          name: RANDOM-PSP-COMPLETO
+          path: RANDOM-PSP.zip
