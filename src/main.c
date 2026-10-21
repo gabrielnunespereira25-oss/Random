@@ -2,7 +2,6 @@
 #include <pspdisplay.h>
 #include <pspctrl.h>
 #include <pspgu.h>
-#include <pspgum.h>
 #include <png.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -22,9 +21,13 @@ static unsigned int __attribute__((aligned(16)))
 display_list[262144];
 
 typedef struct {
+    short x, y, z;
+} RectVertex;
+
+typedef struct {
     unsigned short u, v;
     short x, y, z;
-} Vertex;
+} SpriteVertex;
 
 typedef struct {
     unsigned int *pixels;
@@ -113,6 +116,12 @@ static int load_png(const char *path, Sprite *s)
 
     png_read_update_info(png, info);
 
+    if (png_get_rowbytes(png, info) != (png_size_t)w * 4) {
+        png_destroy_read_struct(&png, &info, NULL);
+        fclose(fp);
+        return 0;
+    }
+
     int tw = next_power_of_two((int)w);
     int th = next_power_of_two((int)h);
 
@@ -125,7 +134,7 @@ static int load_png(const char *path, Sprite *s)
 
     memset(s->pixels, 0, (size_t)tw * th * 4);
 
-    png_bytep row = malloc(png_get_rowbytes(png, info));
+    png_bytep row = malloc((size_t)w * 4);
     if (!row) {
         png_destroy_read_struct(&png, &info, NULL);
         fclose(fp);
@@ -135,7 +144,6 @@ static int load_png(const char *path, Sprite *s)
 
     for (unsigned int y = 0; y < h; y++) {
         png_read_row(png, row, NULL);
-
         memcpy((unsigned char *)s->pixels +
                    (size_t)y * tw * 4,
                row, (size_t)w * 4);
@@ -163,9 +171,8 @@ static void draw_rect(int x, int y, int w, int h,
     sceGuDisable(GU_TEXTURE_2D);
     sceGuColor(color);
 
-    Vertex *v = (Vertex *)sceGuGetMemory(sizeof(Vertex) * 2);
-
-    memset(v, 0, sizeof(Vertex) * 2);
+    RectVertex *v = (RectVertex *)sceGuGetMemory(
+        sizeof(RectVertex) * 2);
 
     v[0].x = x;
     v[0].y = y;
@@ -178,8 +185,7 @@ static void draw_rect(int x, int y, int w, int h,
     sceGuDrawArray(
         GU_SPRITES,
         GU_VERTEX_16BIT | GU_TRANSFORM_2D,
-        2, NULL, v
-    );
+        2, NULL, v);
 }
 
 static void draw_sprite(Sprite *s, int x, int y)
@@ -187,27 +193,17 @@ static void draw_sprite(Sprite *s, int x, int y)
     if (!s->pixels)
         return;
 
-    sceKernelDcacheWritebackRange(
-        s->pixels,
-        (unsigned int)((size_t)s->tex_width *
-                       s->tex_height * 4));
-
     sceGuEnable(GU_TEXTURE_2D);
     sceGuTexMode(GU_PSM_8888, 0, 0, 0);
-
-    sceGuTexImage(
-        0, s->tex_width, s->tex_height,
-        s->tex_width, s->pixels
-    );
-
+    sceGuTexImage(0, s->tex_width, s->tex_height,
+                  s->tex_width, s->pixels);
     sceGuTexFunc(GU_TFX_MODULATE, GU_TCC_RGBA);
     sceGuTexFilter(GU_NEAREST, GU_NEAREST);
     sceGuTexWrap(GU_CLAMP, GU_CLAMP);
     sceGuColor(0xFFFFFFFF);
 
-    Vertex *v = (Vertex *)sceGuGetMemory(sizeof(Vertex) * 2);
-
-    memset(v, 0, sizeof(Vertex) * 2);
+    SpriteVertex *v = (SpriteVertex *)sceGuGetMemory(
+        sizeof(SpriteVertex) * 2);
 
     v[0].u = 0;
     v[0].v = 0;
@@ -226,8 +222,7 @@ static void draw_sprite(Sprite *s, int x, int y)
         GU_TEXTURE_16BIT |
         GU_VERTEX_16BIT |
         GU_TRANSFORM_2D,
-        2, NULL, v
-    );
+        2, NULL, v);
 
     sceGuDisable(GU_TEXTURE_2D);
 }
@@ -235,21 +230,20 @@ static void draw_sprite(Sprite *s, int x, int y)
 static void setup_gu(void)
 {
     sceGuInit();
+
     sceGuStart(GU_DIRECT, display_list);
 
     sceGuDrawBuffer(
-        GU_PSM_8888, (void *)0x00000, BUF_W);
+        GU_PSM_8888, (void *)0, BUF_W);
 
     sceGuDispBuffer(
-        SCREEN_W, SCREEN_H,
-        (void *)0x88000, BUF_W);
+        SCREEN_W, SCREEN_H, (void *)0x88000, BUF_W);
 
     sceGuDepthBuffer((void *)0x110000, BUF_W);
 
     sceGuOffset(
         2048 - SCREEN_W / 2,
-        2048 - SCREEN_H / 2
-    );
+        2048 - SCREEN_H / 2);
 
     sceGuViewport(2048, 2048, SCREEN_W, SCREEN_H);
     sceGuScissor(0, 0, SCREEN_W, SCREEN_H);
@@ -263,8 +257,7 @@ static void setup_gu(void)
     sceGuClearDepth(0);
     sceGuClear(
         GU_COLOR_BUFFER_BIT |
-        GU_DEPTH_BUFFER_BIT
-    );
+        GU_DEPTH_BUFFER_BIT);
 
     sceGuFinish();
     sceGuSync(0, 0);
@@ -319,14 +312,11 @@ int main(void)
         sceGuClearColor(0xFF252535);
         sceGuClear(
             GU_COLOR_BUFFER_BIT |
-            GU_DEPTH_BUFFER_BIT
-        );
+            GU_DEPTH_BUFFER_BIT);
 
-        /* Chao */
         draw_rect(0, 252, SCREEN_W, 20, 0xFF426344);
 
         if (menu) {
-            /* Menu provisório */
             draw_rect(60, 55, 360, 150, 0xFF393958);
             draw_rect(100, 100, 280, 6, 0xFF70D6FF);
             draw_rect(135, 145, 210, 5, 0xFFFFFFFF);
@@ -338,27 +328,19 @@ int main(void)
                 loaded_path[0] = '\0';
 
                 if (load_png(path, &current)) {
-                    strncpy(
-                        loaded_path, path,
-                        sizeof(loaded_path) - 1
-                    );
-
+                    strncpy(loaded_path, path,
+                            sizeof(loaded_path) - 1);
                     loaded_path[sizeof(loaded_path) - 1] = '\0';
                 }
             }
 
             if (current.pixels) {
-                draw_sprite(
-                    &current,
+                draw_sprite(&current,
                     (int)player.x,
-                    (int)player.y + 32 - current.height
-                );
+                    (int)player.y + 32 - current.height);
             } else {
-                draw_rect(
-                    (int)player.x,
-                    (int)player.y,
-                    24, 32, 0xFF00CCFF
-                );
+                draw_rect((int)player.x, (int)player.y,
+                          24, 32, 0xFF00CCFF);
             }
 
             if (player.paused) {
@@ -369,7 +351,6 @@ int main(void)
 
         sceGuFinish();
         sceGuSync(0, 0);
-
         sceDisplayWaitVblankStart();
         sceGuSwapBuffers();
     }
