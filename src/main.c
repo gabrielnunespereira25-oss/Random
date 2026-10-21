@@ -1,7 +1,7 @@
 
 /*
  * RANDOM - PSP / PSPSDK
- * Menu + sprites PNG + cenario de teste + pausa
+ * Menu, fonte bitmap, sprites PNG e pausa.
  *
  * Estrutura:
  * RANDOM/
@@ -17,21 +17,17 @@
  *
  * Controles:
  * Direcional = mover
- * X = pular / salto duplo
+ * X = salto duplo
  * R + direcional = correr
  * Quadrado = atacar
  * Circulo = magia
  * Start = pausar
- *
- * Bibliotecas: PSPSDK, libpng, zlib
  */
 
 #include <pspkernel.h>
 #include <pspdisplay.h>
 #include <pspgu.h>
 #include <pspctrl.h>
-#include <pspdebug.h>
-#include <pspcache.h>
 
 #include <png.h>
 #include <stdio.h>
@@ -71,45 +67,23 @@ typedef struct {
 static Sprite sprites[SPRITE_COUNT];
 
 enum {
-    SPR_IDLE1,
-    SPR_IDLE2,
-    SPR_WALK1,
-    SPR_WALK2,
-    SPR_WALK3,
-    SPR_WALK4,
-    SPR_RUN1,
-    SPR_RUN2,
-    SPR_RUN3,
-    SPR_RUN4,
-    SPR_JUMP1,
-    SPR_JUMP2,
-    SPR_FALL,
-    SPR_LANDING,
-    SPR_ATTACK1,
-    SPR_ATTACK2,
-    SPR_HURT,
-    SPR_MAGIC
+    SPR_IDLE1, SPR_IDLE2,
+    SPR_WALK1, SPR_WALK2, SPR_WALK3, SPR_WALK4,
+    SPR_RUN1, SPR_RUN2, SPR_RUN3, SPR_RUN4,
+    SPR_JUMP1, SPR_JUMP2,
+    SPR_FALL, SPR_LANDING,
+    SPR_ATTACK1, SPR_ATTACK2,
+    SPR_HURT, SPR_MAGIC
 };
 
 static const char *spriteNames[SPRITE_COUNT] = {
-    "idle_1.png",
-    "idle_2.png",
-    "walk_1.png",
-    "walk_2.png",
-    "walk_3.png",
-    "walk_4.png",
-    "run_1.png",
-    "run_2.png",
-    "run_3.png",
-    "run_4.png",
-    "jump_1.png",
-    "jump_2.png",
-    "fall.png",
-    "landing.png",
-    "attack_1.png",
-    "attack_2.png",
-    "hurt.png",
-    "magic.png"
+    "idle_1.png", "idle_2.png",
+    "walk_1.png", "walk_2.png", "walk_3.png", "walk_4.png",
+    "run_1.png", "run_2.png", "run_3.png", "run_4.png",
+    "jump_1.png", "jump_2.png",
+    "fall.png", "landing.png",
+    "attack_1.png", "attack_2.png",
+    "hurt.png", "magic.png"
 };
 
 enum {
@@ -142,7 +116,6 @@ static int currentSprite = SPR_IDLE1;
 
 static int running = 0;
 static int moving = 0;
-
 static int previousButtons = 0;
 static int gameRunning = 1;
 static int loadedSprites = 0;
@@ -233,7 +206,6 @@ static int loadPNG(const char *path, Sprite *out)
         free(raw);
         free(rows);
         free(texture);
-
         png_destroy_read_struct(&png, &info, NULL);
         fclose(file);
         return 0;
@@ -320,10 +292,6 @@ static int loadPNG(const char *path, Sprite *out)
 
     memset(texture, 0, (size_t)tw * th * sizeof(unsigned int));
 
-    /*
-     * RGBA da libpng para bytes RGBA na memoria
-     * usados pela textura GU_PSM_8888 no PSP.
-     */
     for (png_uint_32 y = 0; y < height; y++) {
         unsigned char *src = rows[y];
 
@@ -346,9 +314,6 @@ static int loadPNG(const char *path, Sprite *out)
 
     png_destroy_read_struct(&png, &info, NULL);
     fclose(file);
-
-    sceKernelDcacheWritebackInvalidateRange(
-        texture, (unsigned int)((size_t)tw * th * 4));
 
     out->width = (int)width;
     out->height = (int)height;
@@ -399,7 +364,6 @@ static int loadAllSprites(void)
 static void initGraphics(void)
 {
     sceGuInit();
-
     sceGuStart(GU_DIRECT, displayList);
 
     sceGuDrawBuffer(GU_PSM_8888, (void *)0, BUF_W);
@@ -417,11 +381,7 @@ static void initGraphics(void)
 
     sceGuEnable(GU_BLEND);
     sceGuBlendFunc(
-        GU_ADD,
-        GU_SRC_ALPHA,
-        GU_ONE_MINUS_SRC_ALPHA,
-        0,
-        0);
+        GU_ADD, GU_SRC_ALPHA, GU_ONE_MINUS_SRC_ALPHA, 0, 0);
 
     sceGuEnable(GU_TEXTURE_2D);
     sceGuTexMode(GU_PSM_8888, 0, 0, GU_FALSE);
@@ -441,7 +401,7 @@ static void initGraphics(void)
 }
 
 /* ---------------------------------------------------------
-   DESENHO 2D
+   RETANGULOS
    --------------------------------------------------------- */
 
 typedef struct {
@@ -474,8 +434,7 @@ static void drawRect(
 }
 
 /* ---------------------------------------------------------
-   FONTE BITMAP ESTATICA 5x7
-   Indices: A-Z, 0-9, :, -, ., >, espaco
+   FONTE 5x7 ESTATICA
    --------------------------------------------------------- */
 
 static const unsigned char font5x7[41][7] = {
@@ -524,10 +483,8 @@ static const unsigned char *glyph(char c)
 }
 
 static void drawText(
-    int x, int y,
-    const char *text,
-    int scale,
-    unsigned int color)
+    int x, int y, const char *text,
+    int scale, unsigned int color)
 {
     int startX = x;
 
@@ -553,9 +510,7 @@ static void drawText(
                     drawRect(
                         (float)(x + col * scale),
                         (float)(y + row * scale),
-                        (float)scale,
-                        (float)scale,
-                        color);
+                        (float)scale, (float)scale, color);
                 }
             }
         }
@@ -565,7 +520,7 @@ static void drawText(
 }
 
 /* ---------------------------------------------------------
-   SPRITES
+   SPRITES TEXTURIZADOS
    --------------------------------------------------------- */
 
 typedef struct {
@@ -575,10 +530,8 @@ typedef struct {
 } TextureVertex;
 
 static void drawSprite(
-    int spriteIndex,
-    float x, float y,
-    float w, float h,
-    int flip)
+    int spriteIndex, float x, float y,
+    float w, float h, int flip)
 {
     if (spriteIndex < 0 || spriteIndex >= SPRITE_COUNT)
         return;
@@ -590,16 +543,11 @@ static void drawSprite(
 
     sceGuEnable(GU_TEXTURE_2D);
     sceGuTexMode(GU_PSM_8888, 0, 0, GU_FALSE);
-
-    sceGuTexImage(
-        0, s->texWidth, s->texHeight,
-        s->texWidth, s->pixels);
-
+    sceGuTexImage(0, s->texWidth, s->texHeight,
+                  s->texWidth, s->pixels);
     sceGuTexFunc(GU_TFX_MODULATE, GU_TCC_RGBA);
     sceGuTexFilter(GU_NEAREST, GU_NEAREST);
     sceGuColor(0xFFFFFFFF);
-
-    sceGuTexSync();
 
     TextureVertex *v =
         (TextureVertex *)sceGuGetMemory(2 * sizeof(TextureVertex));
@@ -628,7 +576,7 @@ static void drawSprite(
 }
 
 /* ---------------------------------------------------------
-   CENARIO DE TESTE
+   CENARIO
    --------------------------------------------------------- */
 
 static void drawBackground(void)
@@ -655,10 +603,6 @@ static void drawBackground(void)
     drawRect(0, FLOOR_Y, SCREEN_W, SCREEN_H - FLOOR_Y,
              0xFF45374D);
     drawRect(0, FLOOR_Y, SCREEN_W, 4, 0xFF8D6F99);
-
-    drawRect(20, 242, 35, 3, 0xFF675273);
-    drawRect(160, 252, 24, 3, 0xFF675273);
-    drawRect(320, 236, 40, 3, 0xFF675273);
 }
 
 static void drawPlayer(void)
@@ -680,11 +624,9 @@ static void drawPlayer(void)
         sprite = SPR_LANDING;
 
     if (sprites[sprite].loaded) {
-        drawSprite(
-            sprite, screenX, playerY,
-            PLAYER_W, PLAYER_H, !facingRight);
+        drawSprite(sprite, screenX, playerY,
+                   PLAYER_W, PLAYER_H, !facingRight);
     } else {
-        /* Marcador visivel se o PNG do personagem falhar. */
         drawRect(screenX + 18, playerY + 4, 28, 25, 0xFFFF80E8);
         drawRect(screenX + 14, playerY + 30, 36, 30, 0xFF8E64D9);
         drawRect(screenX + 12, playerY + 60, 15, 12, 0xFFFFFFFF);
@@ -693,15 +635,15 @@ static void drawPlayer(void)
 }
 
 /* ---------------------------------------------------------
-   JOGO
+   ATUALIZACAO DO JOGADOR
    --------------------------------------------------------- */
 
 static void startGame(void)
 {
     playerX = 70.0f;
     playerY = FLOOR_Y - PLAYER_H;
-    playerVY = 0;
-    cameraX = 0;
+    playerVY = 0.0f;
+    cameraX = 0.0f;
 
     grounded = 1;
     jumpsRemaining = 2;
@@ -756,17 +698,10 @@ static void updatePlayer(void)
     if (pressed(PSP_CTRL_CIRCLE))
         magicTimer = 22;
 
-    if (attackTimer > 0)
-        attackTimer--;
-
-    if (magicTimer > 0)
-        magicTimer--;
-
-    if (hurtTimer > 0)
-        hurtTimer--;
-
-    if (landingTimer > 0)
-        landingTimer--;
+    if (attackTimer > 0) attackTimer--;
+    if (magicTimer > 0) magicTimer--;
+    if (hurtTimer > 0) hurtTimer--;
+    if (landingTimer > 0) landingTimer--;
 
     if (!grounded) {
         playerVY += GRAVITY;
@@ -774,7 +709,7 @@ static void updatePlayer(void)
 
         if (playerY + PLAYER_H >= FLOOR_Y) {
             playerY = FLOOR_Y - PLAYER_H;
-            playerVY = 0;
+            playerVY = 0.0f;
             grounded = 1;
             jumpsRemaining = 2;
             landingTimer = 8;
@@ -785,7 +720,6 @@ static void updatePlayer(void)
         playerX = 2500;
 
     cameraX = playerX - SCREEN_W * 0.4f;
-
     if (cameraX < 0)
         cameraX = 0;
 
@@ -797,10 +731,9 @@ static void updatePlayer(void)
             animationFrame++;
         }
 
-        if (running)
-            currentSprite = SPR_RUN1 + animationFrame % 4;
-        else
-            currentSprite = SPR_WALK1 + animationFrame % 4;
+        currentSprite = running
+            ? SPR_RUN1 + animationFrame % 4
+            : SPR_WALK1 + animationFrame % 4;
     } else if (grounded) {
         animationClock++;
 
@@ -820,8 +753,9 @@ static void updatePlayer(void)
 
 static void drawMenu(void)
 {
-    drawRect(0, 0, SCREEN_W, SCREEN_H, 0xFF100D1B);
+    char countText[8];
 
+    drawRect(0, 0, SCREEN_W, SCREEN_H, 0xFF100D1B);
     drawRect(44, 42, 392, 3, 0xFF644B86);
     drawRect(44, 206, 392, 3, 0xFF644B86);
 
@@ -839,11 +773,7 @@ static void drawMenu(void)
     drawText(130, 230, "DIRECIONAL - ESCOLHER", 1, 0xFFB8A9C9);
     drawText(170, 244, "X - CONFIRMAR", 1, 0xFFB8A9C9);
 
-    /* Diagnostico de sprites encontrados. */
     drawText(10, 10, "PNG:", 1, 0xFFFFFFFF);
-
-    /* Mostra o numero usando os digitos da fonte. */
-    char countText[8];
     snprintf(countText, sizeof(countText), "%d", loadedSprites);
     drawText(40, 10, countText, 1, 0xFFFF80E8);
 }
@@ -855,7 +785,6 @@ static void drawMenu(void)
 static void drawPause(void)
 {
     drawRect(0, 0, SCREEN_W, SCREEN_H, 0xD0100D1B);
-
     drawRect(90, 54, 300, 164, 0xFF292139);
     drawRect(90, 54, 300, 4, 0xFFFF80E8);
 
@@ -902,7 +831,6 @@ static void render(void)
 
     sceGuFinish();
     sceGuSync(0, 0);
-
     sceDisplayWaitVblankStart();
     sceGuSwapBuffers();
 }
