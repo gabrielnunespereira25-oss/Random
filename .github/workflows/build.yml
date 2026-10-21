@@ -23,9 +23,10 @@ jobs:
       - name: Verify files
         shell: sh
         run: |
+          set -eu
+
           echo "Checking project files"
-          ls -la
-          ls -la src
+
           for file in \
             src/main.c \
             src/graphics.h \
@@ -45,6 +46,7 @@ jobs:
               exit 1
             fi
           done
+
           echo "All required files exist."
 
       - name: Clean
@@ -54,16 +56,38 @@ jobs:
         run: make
 
       - name: Verify EBOOT
-        run: test -f EBOOT.PBP
+        shell: sh
+        run: |
+          set -eu
+
+          test -s EBOOT.PBP
+
+          echo "EBOOT generated:"
+          ls -lh EBOOT.PBP
+
+          echo "Checking generated files:"
+          file EBOOT.PBP
+
+          if [ -f RANDOM.prx ]; then
+            file RANDOM.prx
+            ls -lh RANDOM.prx
+          fi
 
       - name: Prepare PSP package
         shell: sh
         run: |
+          set -eu
+
           mkdir -p package/PSP/GAME/RANDOM
+
           cp EBOOT.PBP package/PSP/GAME/RANDOM/
+
           if [ -d assets ]; then
             cp -r assets package/PSP/GAME/RANDOM/
           fi
+
+          echo "Package contents:"
+          find package -type f -print
 
       - name: Upload game
         uses: actions/upload-artifact@v4
