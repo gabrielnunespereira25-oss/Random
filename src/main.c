@@ -1,168 +1,124 @@
 
 #include <pspkernel.h>
-#include <pspdisplay.h>
-#include <pspctrl.h>
 #include <pspdebug.h>
-#include <pspgu.h>
-#include <pspgum.h>
+#include <pspctrl.h>
+#include <pspdisplay.h>
 
 PSP_MODULE_INFO("RANDOM", 0, 1, 0);
 PSP_MAIN_THREAD_ATTR(THREAD_ATTR_USER);
 
-#define SCREEN_W 480
-#define SCREEN_H 272
-#define BUF_W 512
+#define MENU_COUNT 4
 
-static unsigned int __attribute__((aligned(16))) list[262144];
-
-static int selected = 0;
-static int running = 1;
-
-static const char *menu[] = {
+static const char *menu[MENU_COUNT] = {
     "JOGAR",
     "PERSONAGEM",
     "OPCOES",
     "SAIR"
 };
 
-static void setup_gu(void)
-{
-    sceGuInit();
-
-    sceGuStart(GU_DIRECT, list);
-
-    sceGuDrawBuffer(
-        GU_PSM_8888, (void *)0, BUF_W
-    );
-
-    sceGuDispBuffer(
-        SCREEN_W, SCREEN_H,
-        (void *)0x88000, BUF_W
-    );
-
-    sceGuDepthBuffer(
-        (void *)0x110000, BUF_W
-    );
-
-    sceGuOffset(
-        2048 - SCREEN_W / 2,
-        2048 - SCREEN_H / 2
-    );
-
-    sceGuViewport(
-        2048, 2048, SCREEN_W, SCREEN_H
-    );
-
-    sceGuScissor(0, 0, SCREEN_W, SCREEN_H);
-    sceGuEnable(GU_SCISSOR_TEST);
-
-    sceGuDisable(GU_DEPTH_TEST);
-    sceGuDisable(GU_TEXTURE_2D);
-    sceGuDisable(GU_BLEND);
-    sceGuDisable(GU_CULL_FACE);
-
-    sceGuClearColor(0xFF101018);
-    sceGuClearDepth(0);
-    sceGuClear(
-        GU_COLOR_BUFFER_BIT |
-        GU_DEPTH_BUFFER_BIT
-    );
-
-    sceGuFinish();
-    sceGuSync(0, 0);
-
-    sceDisplayWaitVblankStart();
-    sceGuDisplay(GU_TRUE);
-}
-
-static void draw_background(void)
-{
-    sceGuStart(GU_DIRECT, list);
-
-    sceGuClearColor(0xFF101018);
-    sceGuClear(
-        GU_COLOR_BUFFER_BIT |
-        GU_DEPTH_BUFFER_BIT
-    );
-
-    sceGuFinish();
-    sceGuSync(0, 0);
-
-    sceDisplayWaitVblankStart();
-    sceGuSwapBuffers();
-}
+static int selected = 0;
+static int running = 1;
 
 static void draw_menu(void)
 {
+    pspDebugScreenClear();
+
     pspDebugScreenSetXY(2, 2);
     pspDebugScreenSetTextColor(0xFFFFFFFF);
-    pspDebugScreenPrintf("RANDOM PSP\n\n");
+    pspDebugScreenPrintf("RANDOM PSP\n");
+    pspDebugScreenPrintf("--------------------------\n\n");
 
-    for (int i = 0; i < 4; i++) {
+    for (int i = 0; i < MENU_COUNT; i++) {
         if (i == selected) {
             pspDebugScreenSetTextColor(0xFF00FFFF);
+            pspDebugScreenPrintf(" > %s\n", menu[i]);
         } else {
             pspDebugScreenSetTextColor(0xFFFFFFFF);
+            pspDebugScreenPrintf("   %s\n", menu[i]);
         }
-
-        pspDebugScreenPrintf(
-            "%s %s\n",
-            i == selected ? ">" : " ",
-            menu[i]
-        );
     }
 
     pspDebugScreenSetTextColor(0xFFFFFFFF);
-    pspDebugScreenPrintf(
-        "\nX: selecionar\nO: sair\n"
-    );
+    pspDebugScreenPrintf("\n");
+    pspDebugScreenPrintf("CIMA / BAIXO: navegar\n");
+    pspDebugScreenPrintf("X: selecionar\n");
+    pspDebugScreenPrintf("O: sair\n");
 }
 
 int main(void)
 {
     SceCtrlData pad;
+    unsigned int oldButtons = 0;
+
+    pspDebugScreenInit();
 
     sceCtrlSetSamplingCycle(0);
     sceCtrlSetSamplingMode(PSP_CTRL_MODE_ANALOG);
 
-    setup_gu();
-
-    /*
-     * Inicializa o texto de depuracao depois do GU.
-     */
-    pspDebugScreenInit();
+    draw_menu();
 
     while (running) {
         sceCtrlReadBufferPositive(&pad, 1);
 
-        if (pad.Buttons & PSP_CTRL_UP) {
-            selected = (selected + 3) % 4;
-            sceKernelDelayThread(180000);
+        unsigned int pressed =
+            pad.Buttons & ~oldButtons;
+
+        oldButtons = pad.Buttons;
+
+        if (pressed & PSP_CTRL_UP) {
+            selected--;
+
+            if (selected < 0)
+                selected = MENU_COUNT - 1;
+
+            draw_menu();
         }
 
-        if (pad.Buttons & PSP_CTRL_DOWN) {
-            selected = (selected + 1) % 4;
-            sceKernelDelayThread(180000);
+        if (pressed & PSP_CTRL_DOWN) {
+            selected++;
+
+            if (selected >= MENU_COUNT)
+                selected = 0;
+
+            draw_menu();
         }
 
-        if (pad.Buttons & PSP_CTRL_CROSS) {
+        if (pressed & PSP_CTRL_CROSS) {
             if (selected == 3) {
                 running = 0;
             } else {
-                sceKernelDelayThread(180000);
+                pspDebugScreenClear();
+                pspDebugScreenSetXY(2, 2);
+                pspDebugScreenSetTextColor(0xFFFFFFFF);
+
+                pspDebugScreenPrintf("RANDOM PSP\n\n");
+
+                if (selected == 0)
+                    pspDebugScreenPrintf("JOGO\n");
+                else if (selected == 1)
+                    pspDebugScreenPrintf("PERSONAGEM\n");
+                else
+                    pspDebugScreenPrintf("OPCOES\n");
+
+                pspDebugScreenPrintf("\n");
+                pspDebugScreenPrintf(
+                    "Pressione O para voltar.\n"
+                );
             }
         }
 
-        if (pad.Buttons & PSP_CTRL_CIRCLE) {
-            running = 0;
+        if (pressed & PSP_CTRL_CIRCLE) {
+            if (selected != 3) {
+                draw_menu();
+            } else {
+                running = 0;
+            }
         }
 
-        draw_background();
-        draw_menu();
+        sceDisplayWaitVblankStart();
+        sceKernelDelayThread(16000);
     }
 
-    sceGuTerm();
     sceKernelExitGame();
-
     return 0;
 }
