@@ -4,17 +4,16 @@ on:
 workflow_dispatch:
 push:
 paths:
-- "src/"
-- "assets/"
-- "Makefile"
-- ".github/workflows/build.yml"
+- 'src/'
+- 'assets/'
+- 'Makefile'
+- '.github/workflows/build.yml'
 
 jobs:
 build:
 runs-on: ubuntu-latest
-
 container:
-  image: pspdev/pspdev:latest
+image: pspdev/pspdev:latest
 
 steps:
   - name: Checkout
@@ -22,13 +21,10 @@ steps:
 
   - name: Verificar arquivos
     run: |
-      echo "Diretorio atual:"
-      pwd
-      echo "Arquivos dentro de src:"
+      echo "Arquivos em src:"
       ls -la src
       echo "Procurando graphics.h:"
       find . -iname 'graphics.h' -print
-      echo "Verificando nome exato:"
       test -f src/graphics.h
 
   - name: Build EBOOT
