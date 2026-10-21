@@ -1,3 +1,4 @@
+
 #ifndef CHARACTER_H
 #define CHARACTER_H
 
@@ -12,16 +13,27 @@ typedef enum {
 } Animation;
 
 typedef struct {
-    float x, y;
-    float vx, vy;
+    float x;
+    float y;
+    float vx;
+    float vy;
+
     int grounded;
     int frame;
     int timer;
+
     Animation anim;
 } Character;
 
 void character_init(Character *c);
-void character_update(Character *c, unsigned int buttons);
-const char *character_get_sprite(Character *c);
+
+void character_update(
+    Character *c,
+    unsigned int buttons
+);
+
+const char *character_get_sprite(
+    Character *c
+);
 
 #endif
