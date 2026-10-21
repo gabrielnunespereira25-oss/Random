@@ -19,11 +19,6 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install ZIP
-        run: |
-          apt-get update
-          apt-get install -y zip
-
       - name: Check project files
         run: |
           test -f Makefile
@@ -43,8 +38,7 @@ jobs:
           mkdir -p package/PSP/GAME/RANDOM/assets/sprites
           cp EBOOT.PBP package/PSP/GAME/RANDOM/
           cp assets/sprites/*.png package/PSP/GAME/RANDOM/assets/sprites/
-          cd package
-          zip -r ../RANDOM-PSP.zip PSP
+          python3 -c "import zipfile, os; z=zipfile.ZipFile('RANDOM-PSP.zip','w',zipfile.ZIP_DEFLATED); [z.write(os.path.join(root,f),os.path.join(root,f)) for root,dirs,files in os.walk('package/PSP') for f in files]; z.close()"
 
       - name: Upload EBOOT
         uses: actions/upload-artifact@v4
