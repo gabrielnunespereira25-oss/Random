@@ -1,46 +1,55 @@
 name: Build RANDOM PSP
 
 'on':
-  workflow_dispatch:
-  push:
-    paths:
-      - "src/**"
-      - "assets/**"
-      - "Makefile"
-      - ".github/workflows/build.yml"
+workflow_dispatch:
+push:
+paths:
+- "src/"
+- "assets/"
+- "Makefile"
+- ".github/workflows/build.yml"
 
 jobs:
-  build:
-    runs-on: ubuntu-latest
-    container:
-      image: pspdev/pspdev:latest
+build:
+runs-on: ubuntu-latest
+container:
+image: pspdev/pspdev:latest
 
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+steps:
+  - name: Checkout
+    uses: actions/checkout@v4
 
-      - name: Verify source files
-        run: |
-          echo "Checking source files"
-          ls -la src
-          test -f src/graphics.h
+  - name: Verify files
+    shell: sh
+    run: |
+      echo "Checking project files"
+      ls -la
+      ls -la src
+      test -f src/main.c
+      test -f src/graphics.h
+      test -f src/graphics.c
+      test -f Makefile
 
-      - name: Compile game
-        run: |
-          make clean || true
-          make
+  - name: Clean
+    run: make clean
 
-      - name: Prepare package
-        run: |
-          mkdir -p package
-          cp EBOOT.PBP package/
-          if [ -d assets ]; then
-            cp -r assets package/
-          fi
+  - name: Compile RANDOM
+    run: make
 
-      - name: Upload PSP game
-        uses: actions/upload-artifact@v4
-        with:
-          name: RANDOM-PSP
-          path: package/
-          if-no-files-found: error
+  - name: Verify EBOOT
+    run: test -f EBOOT.PBP
+
+  - name: Prepare PSP package
+    run: |
+      mkdir -p package/PSP/GAME/RANDOM
+      cp EBOOT.PBP package/PSP/GAME/RANDOM/
+      if [ -d assets ]; then
+        cp -r assets package/PSP/GAME/RANDOM/
+      fi
+
+  - name: Upload game
+    uses: actions/upload-artifact@v4
+    with:
+      name: RANDOM-PSP
+      path: package/
+      if-no-files-found: error
