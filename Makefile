@@ -29,8 +29,21 @@ LIBS = \
 EXTRA_TARGETS = EBOOT.PBP
 PSP_EBOOT_TITLE = RANDOM
 
+PSP_EBOOT_ICON = ICON0.PNG
+
 ifeq ($(strip $(PSPSDK)),)
 $(error PSPSDK nao encontrado)
 endif
+
+.PHONY: all clean package-assets
+
+all: $(EXTRA_TARGETS)
+
+package-assets:
+	mkdir -p assets/sprites
+
+clean:
+	$(MAKE) -f $(PSPSDK)/lib/build.mak clean
+	rm -f EBOOT.PBP
 
 include $(PSPSDK)/lib/build.mak
