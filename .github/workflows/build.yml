@@ -33,21 +33,20 @@ jobs:
           make
           test -f EBOOT.PBP
 
-      - name: Package game
-        run: |
-          mkdir -p package/PSP/GAME/RANDOM/assets/sprites
-          cp EBOOT.PBP package/PSP/GAME/RANDOM/
-          cp assets/sprites/*.png package/PSP/GAME/RANDOM/assets/sprites/
-          python3 -c "import zipfile, os; z=zipfile.ZipFile('RANDOM-PSP.zip','w',zipfile.ZIP_DEFLATED); [z.write(os.path.join(root,f),os.path.join(root,f)) for root,dirs,files in os.walk('package/PSP') for f in files]; z.close()"
-
       - name: Upload EBOOT
         uses: actions/upload-artifact@v4
         with:
           name: RANDOM-PSP-EBOOT
           path: EBOOT.PBP
 
-      - name: Upload complete game
+      - name: Prepare package files
+        run: |
+          mkdir -p package/PSP/GAME/RANDOM/assets/sprites
+          cp EBOOT.PBP package/PSP/GAME/RANDOM/
+          cp assets/sprites/*.png package/PSP/GAME/RANDOM/assets/sprites/
+
+      - name: Upload package files
         uses: actions/upload-artifact@v4
         with:
-          name: RANDOM-PSP-COMPLETO
-          path: RANDOM-PSP.zip
+          name: RANDOM-PSP-ARQUIVOS
+          path: package/PSP/
