@@ -65,13 +65,16 @@ jobs:
           echo "EBOOT generated:"
           ls -lh EBOOT.PBP
 
-          echo "Checking generated files:"
-          file EBOOT.PBP
+          echo "Checking PBP signature:"
+          HEADER="$(od -An -tx1 -N4 EBOOT.PBP | tr -d ' \n')"
+          echo "Header: $HEADER"
 
-          if [ -f RANDOM.prx ]; then
-            file RANDOM.prx
-            ls -lh RANDOM.prx
+          if [ "$HEADER" != "00504250" ]; then
+            echo "ERROR: Invalid PBP signature"
+            exit 1
           fi
+
+          echo "PBP signature verified."
 
       - name: Prepare PSP package
         shell: sh
