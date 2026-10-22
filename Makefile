@@ -11,24 +11,15 @@ CXXFLAGS = $(CFLAGS)
 ASFLAGS = $(CFLAGS)
 
 OBJS = \
-    src/main.o \
-    src/menu.o \
-    src/game.o \
-    src/graphics.o \
-    src/sprite.o \
-    src/character.o
+	src/main.o \
+	src/menu.o \
+	src/game.o \
+	src/graphics.o \
+	src/sprite.o \
+	src/character.o
 
-LIBS = \
-    -lpng \
-    -lz \
-    -lm \
-    -lpspgum \
-    -lpspgu \
-    -lpspdebug \
-    -lpspdisplay \
-    -lpspge \
-    -lpspctrl \
-    -lpspkernel
+LIBS = -lpng -lz -lm -lpspgum -lpspgu -lpspdebug \
+       -lpspdisplay -lpspge -lpspctrl -lpspkernel
 
 EXTRA_TARGETS = EBOOT.PBP
 PSP_EBOOT_TITLE = RANDOM
