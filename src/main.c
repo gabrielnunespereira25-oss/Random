@@ -1,100 +1,61 @@
 
-name: Build RANDOM PSP
+#include <pspkernel.h>
+#include <pspctrl.h>
+#include <pspdisplay.h>
 
-'on':
-  workflow_dispatch:
-  push:
-    paths:
-      - "src/**"
-      - "assets/**"
-      - "Makefile"
-      - ".github/workflows/build.yml"
+#include "graphics.h"
+#include "menu.h"
+#include "game.h"
 
-jobs:
-  build:
-    runs-on: ubuntu-latest
-    container:
-      image: pspdev/pspdev:latest
+PSP_MODULE_INFO("RANDOM", 0, 1, 0);
+PSP_MAIN_THREAD_ATTR(THREAD_ATTR_USER);
 
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+int main(void)
+{
+    SceCtrlData pad;
+    unsigned int previous_buttons = 0;
+    int running = 1;
 
-      - name: Verify files
-        shell: sh
-        run: |
-          set -eu
+    sceCtrlSetSamplingCycle(0);
+    sceCtrlSetSamplingMode(PSP_CTRL_MODE_DIGITAL);
 
-          echo "Checking project files"
+    graphics_init();
+    menu_init();
+    game_init();
 
-          for file in \
-            src/main.c \
-            src/graphics.h \
-            src/graphics.c \
-            src/menu.h \
-            src/menu.c \
-            src/game.h \
-            src/game.c \
-            src/sprite.h \
-            src/sprite.c \
-            src/character.h \
-            src/character.c \
-            Makefile
-          do
-            if [ ! -f "$file" ]; then
-              echo "MISSING FILE: $file"
-              exit 1
-            fi
-          done
+    while (running) {
+        unsigned int buttons;
+        unsigned int pressed;
 
-          echo "All required files exist."
+        sceCtrlReadBufferPositive(&pad, 1);
 
-      - name: Clean
-        run: make clean
+        buttons = pad.Buttons;
+        pressed = buttons & ~previous_buttons;
+        previous_buttons = buttons;
 
-      - name: Compile RANDOM
-        run: make
+        if (menu_is_active()) {
+            menu_update(pressed, &running);
+        } else {
+            game_update(pressed);
 
-      - name: Verify EBOOT
-        shell: sh
-        run: |
-          set -eu
+            if (game_return_to_menu()) {
+                menu_show();
+            }
+        }
 
-          test -s EBOOT.PBP
+        graphics_begin_frame();
 
-          echo "EBOOT generated:"
-          ls -lh EBOOT.PBP
+        if (menu_is_active()) {
+            menu_draw();
+        } else {
+            game_draw();
+        }
 
-          echo "Checking PBP signature:"
-          HEADER="$(od -An -tx1 -N4 EBOOT.PBP | tr -d ' \n')"
-          echo "Header: $HEADER"
+        graphics_end_frame();
+    }
 
-          if [ "$HEADER" != "00504250" ]; then
-            echo "ERROR: Invalid PBP signature"
-            exit 1
-          fi
+    graphics_shutdown();
+    sceKernelExitGame();
 
-          echo "PBP signature verified."
-
-      - name: Prepare PSP package
-        shell: sh
-        run: |
-          set -eu
-
-          mkdir -p package/PSP/GAME/RANDOM
-
-          cp EBOOT.PBP package/PSP/GAME/RANDOM/
-
-          if [ -d assets ]; then
-            cp -r assets package/PSP/GAME/RANDOM/
-          fi
-
-          echo "Package contents:"
-          find package -type f -print
-
-      - name: Upload game
-        uses: actions/upload-artifact@v4
-        with:
-          name: RANDOM-PSP
-          path: package/
-          if-no-files-found: error
+    return 0;
+}
